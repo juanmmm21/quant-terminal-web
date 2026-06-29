@@ -1,18 +1,69 @@
 # quant-terminal-web
 
-Dashboard web de control del ecosistema quant. Expone una **API REST** estable (`/api/v1/...`) y una interfaz React para monitorizar bots, ver rendimiento, consultar el trail de auditoría y activar el **botón de pánico**. Duodécimo módulo del ecosistema [quant-core-infra](https://github.com/juanmmm21/quant-core-infra).
+**Herramienta de análisis cuantitativo en tiempo real** del ecosistema quant. Entrena sobre histórico, emite **recomendaciones** (comprar / vender / mantener) sobre el precio live y muestra un gráfico interactivo con múltiples marcos temporales.
 
 Repositorio: [github.com/juanmmm21/quant-terminal-web](https://github.com/juanmmm21/quant-terminal-web)
 
+## Arranque con un solo comando
+
+```bash
+cd quant-terminal-web
+python3 scripts/start_terminal.py
+```
+
+Esto levanta automáticamente:
+
+1. Bootstrap histórico (si falta lakehouse)
+2. Ticks live de Binance → `data/live/ticks.jsonl`
+3. Ingesta al lakehouse (`1m`, `5m`, `1h`)
+4. Motor de análisis (indicadores + señales sobre histórico)
+5. API FastAPI en `http://127.0.0.1:8000`
+6. UI React en `http://localhost:5173`
+
+También: `npm start` (alias al script anterior).
+
 ---
 
-## Qué es y qué problema resuelve
+## Qué hace (sin simular cuenta)
 
-Los módulos backend del ecosistema (backtester, métricas, auditoría, routing) producen datos valiosos, pero no son operables por un humano sin una capa de visualización y control.
+| Capa | Módulo | Función |
+|------|--------|---------|
+| Histórico | `market-data-lakehouse` | Velas OHLCV en Parquet |
+| Indicadores | `ta-indicators-from-scratch` | RSI, MACD, medias |
+| Señales | `alpha-signal-generator` | Entrada/salida entrenada |
+| Live | `tick_bridge` + lakehouse | Precio y velas actualizadas |
+| UI | `quant-terminal-web` | Recomendación + gráfico TradingView-like |
 
-`quant-terminal-web` cierra ese gap: es la **consola operativa** que lee datos del ecosistema **sin imports cruzados** entre repos (solo JSON, SQLite, Parquet y subprocess), y ofrece la misma API que consumirá `quant-terminal-ios`.
+**No hay simulación de capital ni paper trading en el flujo principal.** La UI muestra recomendaciones, indicadores, señales históricas y métricas de entrenamiento (acierto direccional sobre histórico).
 
 ---
+
+## Gráfico interactivo
+
+- Librería **lightweight-charts** (zoom, pan, rueda, pinch)
+- Marcos: `1m`, `5m`, `10m`, `15m`, `1h` (`10m`/`15m` agregados desde `1m`)
+- Marcadores de señales históricas en el gráfico
+- Pantalla completa y «Ajustar zoom»
+
+---
+
+## API principal
+
+| Endpoint | Descripción |
+|----------|-------------|
+| `GET /api/v1/market/candles?timeframe=1h` | Velas + último precio live |
+| `GET /api/v1/analysis/snapshot?timeframe=1h` | Recomendación, indicadores, entrenamiento |
+| `GET /api/v1/summary` | Resumen para la barra superior |
+| `POST /api/v1/bot/pause` | Pausa el motor de análisis |
+
+---
+
+## Requisitos
+
+- Python 3.11+, Node 20+
+- CLIs del ecosistema en PATH o `.venv` del monorepo (`market-data-lakehouse`, `ta-indicators-from-scratch`, `alpha-signal-generator`)
+
+Ver secciones de instalación y desarrollo más abajo en este README para detalle de backend/frontend.
 
 ## Rol en quant-core-infra
 

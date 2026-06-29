@@ -25,6 +25,14 @@ export function formatMoney(value: string, decimals = 2): string {
   });
 }
 
+export function formatPercent(value: string): string {
+  const numeric = Number(value);
+  if (Number.isNaN(numeric)) {
+    return value;
+  }
+  return `${(numeric * 100).toFixed(1)} %`;
+}
+
 export function formatRelative(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) {

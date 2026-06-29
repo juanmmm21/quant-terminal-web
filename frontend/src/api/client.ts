@@ -1,14 +1,13 @@
 import type {
+  AnalysisSnapshot,
   AuditEventsResponse,
   BotActionResponse,
   BotStatusResponse,
   CandlesData,
   EcosystemStatus,
-  EquityCurve,
   HealthResponse,
-  PerformanceMetrics,
   TerminalSummary,
-  TradesData,
+  Timeframe,
 } from "../types/api";
 
 const API_BASE = "/api/v1";
@@ -55,10 +54,10 @@ export const api = {
       body: JSON.stringify({ reason }),
     }),
   resetBot: () => request<BotActionResponse>("/bot/reset", { method: "POST" }),
-  metrics: () => request<PerformanceMetrics>("/metrics"),
-  equityCurve: () => request<EquityCurve>("/equity-curve"),
-  candles: () => request<CandlesData>("/market/candles"),
-  trades: () => request<TradesData>("/trades"),
+  candles: (timeframe: Timeframe, limit = 500) =>
+    request<CandlesData>(`/market/candles?timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`),
+  analysisSnapshot: (timeframe: Timeframe) =>
+    request<AnalysisSnapshot>(`/analysis/snapshot?timeframe=${encodeURIComponent(timeframe)}`),
   auditEvents: (limit = 50) => request<AuditEventsResponse>(`/audit/events?limit=${limit}`),
   ecosystemStatus: () => request<EcosystemStatus>("/ecosystem/status"),
 };

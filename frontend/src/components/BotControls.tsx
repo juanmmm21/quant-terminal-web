@@ -14,9 +14,9 @@ interface BotControlsProps {
 }
 
 const STATUS_HELP: Record<BotStatus, string> = {
-  running: "El bot opera con normalidad. Puedes pausarlo o activar la parada de emergencia.",
-  paused: "Las nuevas operaciones están bloqueadas. Pulsa Reanudar para continuar.",
-  panic: "Todas las operaciones están detenidas. Revisa el motivo y reinicia cuando sea seguro.",
+  running: "El motor emite recomendaciones sobre precio live. Puedes pausarlo o detenerlo.",
+  paused: "No se actualizarán recomendaciones hasta reanudar.",
+  panic: "Análisis detenido. Reinicia cuando quieras volver a operar.",
 };
 
 export function BotControls({
@@ -35,7 +35,7 @@ export function BotControls({
     <section className={`panel bot-controls ${isPanic ? "panel-panic" : ""}`}>
       <header className="section-header">
         <div className="panel-header-row">
-          <h2>Control del bot</h2>
+          <h2>Motor de análisis</h2>
           <BotStatusBadge status={status} />
         </div>
       </header>

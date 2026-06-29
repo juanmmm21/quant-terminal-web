@@ -1,5 +1,5 @@
 import type { TerminalSummary } from "../types/api";
-import { formatDateTime, formatMoney } from "../utils/format";
+import { formatDateTime, formatMoney, formatPercent } from "../utils/format";
 import { BotStatusBadge } from "./BotStatusBadge";
 
 interface TopBarProps {
@@ -9,9 +9,17 @@ interface TopBarProps {
   onRefresh: () => void;
 }
 
+function verdictLabel(verdict: string): string {
+  const map: Record<string, string> = {
+    buy: "Comprar",
+    sell: "Vender",
+    hold: "Mantener",
+  };
+  return map[verdict] ?? verdict;
+}
+
 export function TopBar({ summary, apiVersion, refreshing, onRefresh }: TopBarProps) {
-  const capitalChange = Number(summary.capital_change);
-  const changeClass = capitalChange >= 0 ? "price-up" : "price-down";
+  const changeNum = Number(summary.change_pct);
 
   return (
     <header className="top-bar">
@@ -22,30 +30,30 @@ export function TopBar({ summary, apiVersion, refreshing, onRefresh }: TopBarPro
 
       <div className="ticker-strip">
         <div className="ticker-card">
-          <span className="ticker-label">Precio BTC</span>
-          <strong>{formatMoney(summary.last_price)} {summary.price_currency}</strong>
-        </div>
-        <div className="ticker-card highlight-capital">
-          <span className="ticker-label">Capital cuenta</span>
-          <strong>{formatMoney(summary.account_capital)} {summary.capital_currency}</strong>
-          <small className={changeClass}>
-            {capitalChange >= 0 ? "+" : ""}
-            {formatMoney(summary.capital_change)} vs inicio
+          <span className="ticker-label">Precio {summary.symbol}</span>
+          <strong>
+            {formatMoney(summary.last_price)} {summary.price_currency}
+          </strong>
+          <small className={changeNum >= 0 ? "price-up" : "price-down"}>
+            {Number.isNaN(changeNum) ? summary.change_pct : formatPercent(summary.change_pct)}
           </small>
         </div>
-        <div className="ticker-card">
-          <span className="ticker-label">Round-trips</span>
-          <strong>{summary.trade_count}</strong>
+        <div className="ticker-card highlight-recommendation">
+          <span className="ticker-label">Recomendación ({summary.analysis_timeframe})</span>
+          <strong className={`verdict-${summary.recommendation_verdict}`}>
+            {verdictLabel(summary.recommendation_verdict).toUpperCase()}
+          </strong>
+          <small>{(summary.recommendation_confidence * 100).toFixed(0)}% confianza</small>
         </div>
         <div className="ticker-card">
-          <span className="ticker-label">Estado bot</span>
+          <span className="ticker-label">Motor</span>
           <BotStatusBadge status={summary.bot_status} />
         </div>
       </div>
 
       <div className="top-actions">
         <span className={`mode-pill mode-${summary.data_mode}`}>
-          {summary.data_mode === "live" ? "Datos live" : "Modo demo"}
+          {summary.data_mode === "live" ? "Live" : "Demo"}
         </span>
         <span className="sync-label">Sync {formatDateTime(summary.last_sync)}</span>
         <span className="api-label">v{apiVersion}</span>

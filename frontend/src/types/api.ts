@@ -1,4 +1,5 @@
 export type BotStatus = "running" | "paused" | "panic";
+export type Timeframe = "1m" | "5m" | "10m" | "15m" | "1h";
 
 export interface BotStatusResponse {
   status: BotStatus;
@@ -11,32 +12,6 @@ export interface BotActionResponse {
   updated_at: string;
   action: string;
   message: string;
-}
-
-export interface PerformanceMetrics {
-  symbol: string;
-  sharpe_ratio: string;
-  sortino_ratio: string;
-  profit_factor: string;
-  max_drawdown_pct: string;
-  total_return_pct: string;
-  win_rate: string;
-  trade_count: number;
-  computed_at: string | null;
-}
-
-export interface EquityPoint {
-  event_time: string;
-  equity: string;
-}
-
-export interface EquityCurve {
-  symbol: string;
-  currency: string;
-  label: string;
-  initial_capital: string;
-  current_capital: string;
-  points: EquityPoint[];
 }
 
 export interface Candle {
@@ -57,35 +32,70 @@ export interface CandlesData {
   candles: Candle[];
 }
 
-export interface TradeFill {
-  order_id: string;
-  symbol: string;
-  side: "buy" | "sell" | string;
-  quantity: string;
-  price: string;
-  commission: string;
-  filled_at: string;
-  realized_pnl: string | null;
-  label: string | null;
-}
-
-export interface TradesData {
-  trades: TradeFill[];
-  count: number;
-  closed_round_trips: number;
-}
-
 export interface TerminalSummary {
   data_mode: string;
   symbol: string;
   last_price: string;
   price_currency: string;
-  account_capital: string;
-  capital_currency: string;
-  capital_change: string;
-  trade_count: number;
+  change_pct: string;
+  recommendation_verdict: string;
+  recommendation_confidence: number;
+  analysis_timeframe: string;
   bot_status: BotStatus;
   last_sync: string;
+}
+
+export interface Recommendation {
+  verdict: string;
+  action: string;
+  side: string | null;
+  confidence: number;
+  reason: string;
+  strategy_id: string;
+  reference_price: string;
+  event_time: string | null;
+}
+
+export interface IndicatorSnapshot {
+  rsi: number | null;
+  macd_line: number | null;
+  signal_line: number | null;
+  sma_20: number | null;
+  ema_20: number | null;
+}
+
+export interface TrainingStats {
+  timeframe: string;
+  symbol: string;
+  bars_analyzed: number;
+  signal_count: number;
+  enter_signals: number;
+  exit_signals: number;
+  directional_win_rate: string;
+  selected_strategy: string;
+  trained_at: string;
+}
+
+export interface SignalMarker {
+  event_time: string;
+  action: string;
+  side: string | null;
+  confidence: number;
+  reason: string;
+  reference_price: string;
+  strategy_id: string;
+}
+
+export interface AnalysisSnapshot {
+  symbol: string;
+  timeframe: string;
+  last_price: string;
+  currency: string;
+  updated_at: string;
+  recommendation: Recommendation;
+  indicators: IndicatorSnapshot;
+  training: TrainingStats;
+  signals: SignalMarker[];
 }
 
 export interface AuditEvent {
@@ -115,6 +125,7 @@ export interface EcosystemStatus {
   ecosystem_ready: boolean;
   lakehouse_ready: boolean;
   live_ticks_ready: boolean;
+  analysis_ready: boolean;
   paths: Record<string, string>;
   modules: Record<string, string>;
   manifest: Record<string, unknown> | null;

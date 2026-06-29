@@ -698,6 +698,208 @@ button:disabled {
   background: var(--surface);
 }
 
+.trading-chart-panel .chart-canvas-wrap {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.chart-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.5rem 0 0.75rem;
+  flex-wrap: wrap;
+}
+
+.timeframe-tabs {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.tf-tab {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.tf-tab.active {
+  background: #e8f0ff;
+  border-color: #b8c9f5;
+  color: #1a3a7a;
+  font-weight: 600;
+}
+
+.chart-toolbar-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.btn-sm {
+  font-size: 0.82rem;
+  padding: 0.35rem 0.65rem;
+}
+
+.verdict-pill,
+.verdict-card {
+  border-radius: 10px;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.verdict-buy,
+.verdict-card.verdict-buy {
+  background: #e8f7f1;
+  color: #0d5c45;
+  border: 1px solid #b7e3d7;
+}
+
+.verdict-sell,
+.verdict-card.verdict-sell {
+  background: #fdeeee;
+  color: #8f1f2f;
+  border: 1px solid #f3c0c7;
+}
+
+.verdict-hold,
+.verdict-card.verdict-hold {
+  background: #f4f6fa;
+  color: #475569;
+  border: 1px solid #dbe3ef;
+}
+
+.recommendation-panel .verdict-card {
+  padding: 0.85rem;
+  margin-top: 0.5rem;
+}
+
+.verdict-title {
+  display: block;
+  font-size: 1.1rem;
+  letter-spacing: 0.04em;
+}
+
+.verdict-confidence {
+  display: block;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.indicator-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.indicator-grid dt {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.indicator-grid dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.training-block {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.training-stats {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.training-stats li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+}
+
+.training-updated {
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.signal-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.signal-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  background: var(--surface);
+}
+
+.signal-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.signal-meta {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.recommendation-hint {
+  margin-top: 0.65rem;
+  font-size: 0.88rem;
+}
+
+.recommendation-hint .hint-meta {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin-top: 0.2rem;
+}
+
+.highlight-recommendation {
+  background: #f8fbff;
+}
+
+.trading-chart-panel.is-fullscreen {
+  background: #fff;
+  padding: 1rem;
+}
+
+.panel-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 0.9rem;
+  background: var(--surface-2);
+}
+
+.panel-card h3,
+.panel-card h4 {
+  margin: 0 0 0.35rem;
+}
+
 @media (max-width: 1180px) {
   .terminal-layout {
     grid-template-columns: 1fr;
