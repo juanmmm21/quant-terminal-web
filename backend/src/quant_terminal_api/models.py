@@ -17,6 +17,20 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     version: str
     timestamp: datetime
+    data_mode: str = "demo"
+
+
+class TerminalSummaryResponse(BaseModel):
+    data_mode: str
+    symbol: str
+    last_price: str
+    price_currency: str = "USDT"
+    account_capital: str
+    capital_currency: str = "USDT"
+    capital_change: str
+    trade_count: int
+    bot_status: BotStatus
+    last_sync: datetime
 
 
 class BotStatusResponse(BaseModel):
@@ -51,6 +65,10 @@ class EquityPointResponse(BaseModel):
 
 class EquityCurveResponse(BaseModel):
     symbol: str
+    currency: str = "USDT"
+    label: str = "Capital de la cuenta"
+    initial_capital: str
+    current_capital: str
     points: list[EquityPointResponse]
 
 
@@ -75,3 +93,39 @@ class ErrorResponse(BaseModel):
 
 class PanicRequest(BaseModel):
     reason: str = Field(default="manual_panic", min_length=1, max_length=500)
+
+
+class CandleResponse(BaseModel):
+    open_time: datetime
+    open: str
+    high: str
+    low: str
+    close: str
+    volume: str
+
+
+class CandlesResponse(BaseModel):
+    symbol: str
+    interval: str
+    currency: str = "USDT"
+    last_price: str
+    change_pct: str
+    candles: list[CandleResponse]
+
+
+class TradeFillResponse(BaseModel):
+    order_id: str
+    symbol: str
+    side: str
+    quantity: str
+    price: str
+    commission: str
+    filled_at: datetime
+    realized_pnl: str | None = None
+    label: str | None = None
+
+
+class TradesResponse(BaseModel):
+    trades: list[TradeFillResponse]
+    count: int
+    closed_round_trips: int
