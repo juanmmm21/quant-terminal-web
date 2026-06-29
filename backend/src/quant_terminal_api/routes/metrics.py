@@ -29,10 +29,9 @@ async def get_equity_curve(
     reader: Annotated[EquityReader, Depends(get_equity_reader)],
 ) -> EquityCurveResponse:
     try:
-        symbol, points = reader.load()
+        return reader.load()
     except DataSourceError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
-    return EquityCurveResponse(symbol=symbol, points=points)
