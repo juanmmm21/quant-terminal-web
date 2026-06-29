@@ -19,7 +19,8 @@ import type {
   Timeframe,
 } from "./types/api";
 
-const REFRESH_MS = 8_000;
+const REFRESH_MS = 3_000;
+const CHART_CANDLE_LIMIT = 10_000;
 const TOAST_DURATION_MS = 5_000;
 
 type PendingAction = "panic" | "reset" | null;
@@ -51,7 +52,6 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [apiVersion, setApiVersion] = useState<string>("");
-  const [dataMode, setDataMode] = useState<string>("demo");
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
 
@@ -78,17 +78,22 @@ export default function App() {
           api.health(),
           api.summary(),
           api.botStatus(),
-          api.candles(tf),
+          api.candles(tf, CHART_CANDLE_LIMIT),
           api.analysisSnapshot(tf),
           api.auditEvents(20),
         ]);
 
-        const [healthResult, summaryResult, statusResult, candlesResult, analysisResult, auditResult] =
-          results;
+        const [
+          healthResult,
+          summaryResult,
+          statusResult,
+          candlesResult,
+          analysisResult,
+          auditResult,
+        ] = results;
 
         if (healthResult.status === "fulfilled") {
           setApiVersion(healthResult.value.version);
-          setDataMode(healthResult.value.data_mode);
         }
 
         if (summaryResult.status === "fulfilled") {
@@ -119,15 +124,7 @@ export default function App() {
           setEvents(auditResult.value.events);
         }
 
-        if (errors.length > 0) {
-          setError(
-            errors.includes("análisis")
-              ? `Motor de análisis iniciando… (${errors.join(", ")})`
-              : `No se cargaron: ${errors.join(", ")}`,
-          );
-        } else {
-          setError(null);
-        }
+        setError(errors.length > 0 ? errors.join(", ") : null);
       } catch (err) {
         const raw = err instanceof ApiError ? err.message : "Failed to load dashboard data";
         setError(translateError(raw));
@@ -197,30 +194,15 @@ export default function App() {
         />
       ) : null}
 
-      <div className={dataMode === "live" ? "info-banner" : "demo-banner"} role="note">
-        {dataMode === "live" ? (
-          <>
-            <strong>Herramienta live:</strong> precios en tiempo real, velas del lakehouse y
-            recomendaciones entrenadas sobre histórico. Un solo comando:{" "}
-            <code>python3 scripts/start_terminal.py</code>
-          </>
-        ) : (
-          <>
-            <strong>Arranque rápido:</strong> ejecuta <code>python3 scripts/start_terminal.py</code>{" "}
-            para bootstrap histórico, ticks live, análisis y UI.
-          </>
-        )}
-      </div>
-
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
 
       {error ? (
         <div className="error-banner" role="alert">
-          <strong>Aviso:</strong> {error}
+          {error}
         </div>
       ) : null}
 
-      <main className="terminal-layout analysis-layout">
+      <main className="terminal-layout">
         <aside className="sidebar">
           <BotControls
             status={botStatus}
@@ -236,7 +218,7 @@ export default function App() {
         </aside>
 
         <section className="main-column">
-          {candles ? (
+          {candles && candles.candles.length > 0 ? (
             <TradingChart
               symbol={candles.symbol}
               currency={candles.currency}
@@ -260,7 +242,7 @@ export default function App() {
       <ConfirmDialog
         open={pendingAction === "panic"}
         title="¿Detener el análisis?"
-        message="Se dejarán de emitir recomendaciones hasta reinicio manual."
+        message="El motor dejará de emitir recomendaciones. Podrás reiniciarlo cuando quieras."
         confirmLabel="Sí, detener"
         cancelLabel="Cancelar"
         danger
@@ -276,7 +258,7 @@ export default function App() {
       <ConfirmDialog
         open={pendingAction === "reset"}
         title="¿Reiniciar el análisis?"
-        message="El motor volverá a emitir recomendaciones sobre precio live."
+        message="Volverás a recibir recomendaciones basadas en el precio actual del mercado."
         confirmLabel="Sí, reiniciar"
         cancelLabel="Cancelar"
         onConfirm={() => void runAction(() => api.resetBot(), "Análisis reiniciado")}

@@ -1,5 +1,7 @@
 import type { AuditEvent } from "../types/api";
+import { GLOSSARY } from "../utils/glossary";
 import { formatDateTime } from "../utils/format";
+import { HelpTip } from "./HelpTip";
 
 interface AuditFeedProps {
   events: AuditEvent[];
@@ -10,41 +12,44 @@ const EVENT_LABELS: Record<string, string> = {
   risk_check: "Control de riesgo",
   order_submitted: "Orden enviada",
   order_filled: "Orden ejecutada",
-  routing_result: "Resultado de routing",
-  system_error: "Error del sistema",
-  metrics_computed: "Métricas calculadas",
+  routing_result: "Enrutamiento",
+  system_error: "Incidencia",
+  metrics_computed: "Métricas",
+  analysis_updated: "Análisis actualizado",
 };
 
-const SEVERITY_LABELS: Record<string, string> = {
-  info: "Info",
-  warning: "Aviso",
-  error: "Error",
-  critical: "Crítico",
-};
-
-function summarizePayload(event: AuditEvent): string {
-  const payload = event.payload;
-  if (event.event_type === "system_error" && typeof payload.message === "string") {
+function formatPayload(payload: Record<string, unknown>): string {
+  if (typeof payload.message === "string") {
     return payload.message;
   }
-  if (event.event_type === "order_filled" && payload.fill_price) {
-    return `Fill @ ${payload.fill_price}`;
+  if (typeof payload.reason === "string") {
+    return payload.reason;
   }
-  if (event.event_type === "risk_check" && payload.verdict) {
-    return `Veredicto: ${String(payload.verdict)}`;
+  if (payload.verdict != null) {
+    return String(payload.verdict);
   }
-  return JSON.stringify(payload);
+  if (payload.action != null) {
+    return String(payload.action);
+  }
+  const entries = Object.entries(payload).slice(0, 4);
+  if (entries.length === 0) {
+    return "";
+  }
+  return entries.map(([key, value]) => `${key}: ${String(value)}`).join(" · ");
 }
 
 export function AuditFeed({ events }: AuditFeedProps) {
   return (
     <section className="audit-panel">
-      <header className="section-header">
-        <h2>Registro de auditoría</h2>
-        <p className="section-subtitle">{events.length} eventos recientes</p>
+      <header className="section-intro">
+        <div className="section-intro-text">
+          <h2>Actividad del sistema</h2>
+          <p>{events.length} eventos</p>
+        </div>
+        <HelpTip text={GLOSSARY.audit.description} />
       </header>
       {events.length === 0 ? (
-        <p className="empty-state">No hay eventos de auditoría recientes.</p>
+        <ul className="audit-feed audit-feed--empty" aria-label="Sin eventos" />
       ) : (
         <ul className="audit-feed">
           {events.map((event) => (
@@ -54,15 +59,16 @@ export function AuditFeed({ events }: AuditFeedProps) {
                   {EVENT_LABELS[event.event_type] ?? event.event_type}
                 </span>
                 <span className={`severity-tag severity-tag-${event.severity}`}>
-                  {SEVERITY_LABELS[event.severity] ?? event.severity}
+                  {event.severity}
                 </span>
                 <span className="audit-time">{formatDateTime(event.occurred_at)}</span>
               </div>
               <div className="audit-body">
                 <strong>{event.symbol}</strong>
-                <span className="audit-correlation">ID: {event.correlation_id}</span>
               </div>
-              <p className="audit-summary">{summarizePayload(event)}</p>
+              {formatPayload(event.payload) ? (
+                <p className="audit-summary">{formatPayload(event.payload)}</p>
+              ) : null}
             </li>
           ))}
         </ul>

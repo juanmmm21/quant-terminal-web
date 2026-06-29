@@ -1,6 +1,8 @@
 import type { BotStatus } from "../types/api";
+import { GLOSSARY } from "../utils/glossary";
 import { formatDateTime, formatRelative } from "../utils/format";
 import { BotStatusBadge } from "./BotStatusBadge";
+import { HelpTip } from "./HelpTip";
 
 interface BotControlsProps {
   status: BotStatus;
@@ -12,12 +14,6 @@ interface BotControlsProps {
   onPanic: () => void;
   onReset: () => void;
 }
-
-const STATUS_HELP: Record<BotStatus, string> = {
-  running: "El motor emite recomendaciones sobre precio live. Puedes pausarlo o detenerlo.",
-  paused: "No se actualizarán recomendaciones hasta reanudar.",
-  panic: "Análisis detenido. Reinicia cuando quieras volver a operar.",
-};
 
 export function BotControls({
   status,
@@ -33,70 +29,47 @@ export function BotControls({
 
   return (
     <section className={`panel bot-controls ${isPanic ? "panel-panic" : ""}`}>
-      <header className="section-header">
-        <div className="panel-header-row">
-          <h2>Motor de análisis</h2>
+      <header className="section-intro compact">
+        <div className="section-intro-text">
+          <h2>Motor</h2>
+        </div>
+        <div className="motor-status-row">
           <BotStatusBadge status={status} />
+          <HelpTip text={GLOSSARY.motor.description} />
         </div>
       </header>
 
-      <p className="status-help">{STATUS_HELP[status]}</p>
-
       {updatedAt ? (
         <p className="status-meta">
-          Último cambio: <strong>{formatDateTime(updatedAt)}</strong>
-          <span className="status-relative"> ({formatRelative(updatedAt)})</span>
+          {formatRelative(updatedAt)} · {formatDateTime(updatedAt)}
         </p>
       ) : null}
 
-      {statusMessage ? (
-        <p className="status-message">
-          <span className="status-message-label">Motivo:</span> {statusMessage}
-        </p>
-      ) : null}
-
-      {isPanic ? (
-        <div className="panic-callout" role="alert">
-          <strong>Parada de emergencia activa.</strong> Resume y Pause están deshabilitados hasta
-          que reinicies el bot.
-        </div>
-      ) : null}
+      {statusMessage ? <p className="status-message">{statusMessage}</p> : null}
 
       <div className="control-buttons">
         <button
           type="button"
           className="button-primary"
-          title={isPanic ? "No disponible en modo pánico" : status === "running" ? "El bot ya está en marcha" : undefined}
           onClick={onResume}
           disabled={loading || status === "running" || isPanic}
         >
-          ▶ Reanudar
+          Reanudar
         </button>
-        <button
-          type="button"
-          title={isPanic ? "No disponible en modo pánico" : status === "paused" ? "El bot ya está pausado" : undefined}
-          onClick={onPause}
-          disabled={loading || status === "paused" || isPanic}
-        >
-          ⏸ Pausar
+        <button type="button" onClick={onPause} disabled={loading || status === "paused" || isPanic}>
+          Pausar
         </button>
         <button
           type="button"
           className="panic-button"
-          title={isPanic ? "El pánico ya está activo" : "Detiene todas las operaciones de inmediato"}
           onClick={onPanic}
           disabled={loading || isPanic}
         >
-          ⛔ Parada de emergencia
+          Parada de emergencia
         </button>
         {isPanic ? (
-          <button
-            type="button"
-            className="button-reset"
-            onClick={onReset}
-            disabled={loading}
-          >
-            ↺ Reiniciar bot
+          <button type="button" className="button-reset" onClick={onReset} disabled={loading}>
+            Reiniciar
           </button>
         ) : null}
       </div>
