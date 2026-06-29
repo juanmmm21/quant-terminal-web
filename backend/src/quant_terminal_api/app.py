@@ -8,9 +8,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from quant_terminal_api import __version__
+from quant_terminal_api.bot_state import BotStateStore
 from quant_terminal_api.config import TerminalSettings
-from quant_terminal_api.dependencies import get_settings
-from quant_terminal_api.routes import audit, bot, health, metrics
+from quant_terminal_api.routes import audit, bot, health, market, metrics, trades
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,6 @@ def create_app(settings: TerminalSettings | None = None) -> FastAPI:
             resolved.equity_path,
         )
         yield
-        get_settings.cache_clear()
         logger.info("quant-terminal-api shutdown complete")
 
     app = FastAPI(
@@ -37,6 +36,8 @@ def create_app(settings: TerminalSettings | None = None) -> FastAPI:
         description="REST API for quant-terminal-web and quant-terminal-ios",
         lifespan=lifespan,
     )
+    app.state.settings = resolved
+    app.state.bot_state = BotStateStore(resolved.bot_state_path)
 
     app.add_middleware(
         CORSMiddleware,
@@ -50,5 +51,7 @@ def create_app(settings: TerminalSettings | None = None) -> FastAPI:
     app.include_router(health.router, prefix=prefix)
     app.include_router(bot.router, prefix=prefix)
     app.include_router(metrics.router, prefix=prefix)
+    app.include_router(market.router, prefix=prefix)
+    app.include_router(trades.router, prefix=prefix)
     app.include_router(audit.router, prefix=prefix)
     return app

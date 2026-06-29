@@ -79,3 +79,17 @@ async def resume(
         action="resume",
         message="bot resumed",
     )
+
+
+@router.post("/reset", response_model=BotActionResponse)
+async def reset(
+    store: Annotated[BotStateStore, Depends(get_bot_state)],
+) -> BotActionResponse:
+    previous = store.status
+    new_status = store.set_running("reiniciado por operador desde el terminal")
+    return BotActionResponse(
+        status=new_status,
+        updated_at=datetime.now(tz=UTC),
+        action="reset",
+        message="bot reiniciado" if previous == BotStatus.PANIC else "bot ya estaba en marcha",
+    )
