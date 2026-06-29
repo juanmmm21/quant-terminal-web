@@ -27,6 +27,7 @@ class MarketCandlesProvider:
     def load(self, *, timeframe: str | None = None, limit: int | None = None) -> CandlesResponse:
         from quant_terminal_api.readers.candle_aggregate import (
             aggregate_candles,
+            dedupe_candles,
             resolve_lakehouse_timeframe,
         )
 
@@ -35,7 +36,7 @@ class MarketCandlesProvider:
         lake_tf, bucket_minutes = resolve_lakehouse_timeframe(requested)
         fetch_limit = candle_limit
         if bucket_minutes is not None:
-            fetch_limit = min(candle_limit * bucket_minutes, 3000)
+            fetch_limit = min(candle_limit * bucket_minutes, 500_000)
 
         reader = LakehouseCandlesReader(
             self._settings.lakehouse_root,
@@ -51,6 +52,7 @@ class MarketCandlesProvider:
 
         if bucket_minutes is not None:
             aggregated = aggregate_candles(candles.candles, bucket_minutes=bucket_minutes)
+            aggregated = dedupe_candles(aggregated)
             if len(aggregated) > candle_limit:
                 aggregated = aggregated[-candle_limit:]
             last_close = aggregated[-1].close if aggregated else candles.last_price
@@ -62,7 +64,10 @@ class MarketCandlesProvider:
                 }
             )
         else:
-            candles = candles.model_copy(update={"interval": requested})
+            deduped = dedupe_candles(candles.candles)
+            if len(deduped) > candle_limit:
+                deduped = deduped[-candle_limit:]
+            candles = candles.model_copy(update={"interval": requested, "candles": deduped})
 
         live_price = self._live_ticks.last_price()
         if live_price is not None:

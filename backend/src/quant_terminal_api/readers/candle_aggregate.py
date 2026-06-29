@@ -46,6 +46,17 @@ def aggregate_candles(
     return aggregated
 
 
+def dedupe_candles(candles: list[CandleResponse]) -> list[CandleResponse]:
+    """Elimina velas con el mismo instante UTC (datos duplicados del lakehouse)."""
+    if not candles:
+        return candles
+    by_epoch: dict[int, CandleResponse] = {}
+    for candle in sorted(candles, key=lambda item: item.open_time):
+        epoch = int(_as_utc(candle.open_time).timestamp())
+        by_epoch[epoch] = candle
+    return [by_epoch[key] for key in sorted(by_epoch)]
+
+
 def resolve_lakehouse_timeframe(requested: str) -> tuple[str, int | None]:
     """
     Devuelve (timeframe_lakehouse, bucket_minutes|None).

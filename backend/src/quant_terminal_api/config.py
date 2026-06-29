@@ -37,7 +37,9 @@ class TerminalSettings(BaseSettings):
         extra="ignore",
     )
 
-    audit_db_path: Path = Field(default_factory=lambda: _default_samples_dir() / "audit.db")
+    audit_db_path: Path = Field(
+        default_factory=lambda: _project_root() / "data" / "runtime" / "audit.db"
+    )
     metrics_path: Path = Field(default_factory=lambda: _default_samples_dir() / "metrics.json")
     equity_path: Path = Field(default_factory=lambda: _default_samples_dir() / "equity.json")
     trades_path: Path = Field(default_factory=lambda: _default_samples_dir() / "trades.jsonl")
@@ -55,7 +57,7 @@ class TerminalSettings(BaseSettings):
         default_factory=lambda: ["1m", "5m", "10m", "15m", "1h"]
     )
     candle_symbol: str = "BTCUSDT"
-    candle_limit: int = 500
+    candle_limit: int = 50_000
     api_prefix: str = "/api/v1"
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"]
@@ -79,8 +81,6 @@ class TerminalSettings(BaseSettings):
         eco_dir = _default_ecosystem_dir().resolve()
         samples = _default_samples_dir().resolve()
         if _ecosystem_outputs_present(eco_dir):
-            if self.audit_db_path == (samples / "audit.db").resolve():
-                self.audit_db_path = eco_dir / "audit.db"
             if self.metrics_path == (samples / "metrics.json").resolve():
                 self.metrics_path = eco_dir / "metrics.json"
             if self.equity_path == (samples / "equity.json").resolve():

@@ -47,7 +47,7 @@ class AuditReader:
         if limit <= 0:
             raise ValueError("limit must be positive")
         if not self._database_path.exists():
-            raise DataSourceError(f"audit database not found: {self._database_path}")
+            return []
 
         query = """
             SELECT event_id, event_type, symbol, correlation_id,

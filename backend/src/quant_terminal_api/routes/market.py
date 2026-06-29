@@ -17,7 +17,7 @@ async def get_candles(
     settings: Annotated[TerminalSettings, Depends(get_settings)],
     provider: Annotated[MarketCandlesProvider, Depends(get_candles_reader)],
     timeframe: str = Query(default="1h"),
-    limit: int = Query(default=500, ge=10, le=2000),
+    limit: int = Query(default=10_000, ge=10, le=50_000),
 ) -> CandlesResponse:
     if timeframe not in settings.supported_timeframes:
         raise HTTPException(

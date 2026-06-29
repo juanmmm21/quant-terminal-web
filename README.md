@@ -22,6 +22,10 @@ Esto levanta automáticamente:
 
 También: `npm start` (alias al script anterior).
 
+**Requisitos:** Node.js 20+ y Python 3.11+. El script crea `backend/.venv` en el primer arranque e instala dependencias ahí (no usa `pip` del sistema).
+
+**Puerto 8000 ocupado:** si ya hay una API en marcha, el script la reutiliza. Si el puerto está ocupado por otro proceso, prueba `:8001` o libera el puerto con `lsof -i :8000`.
+
 ---
 
 ## Qué hace (sin simular cuenta)
