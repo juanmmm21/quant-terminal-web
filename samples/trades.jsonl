@@ -1,0 +1,4 @@
+{"order_id": "ord-101", "symbol": "BTCUSDT", "side": "buy", "quantity": "0.050", "price": "59820.00", "commission": "2.99", "filled_at": "2026-06-28T10:15:00.000Z", "realized_pnl": null, "label": "Entrada long #1"}
+{"order_id": "ord-102", "symbol": "BTCUSDT", "side": "sell", "quantity": "0.050", "price": "60210.00", "commission": "3.01", "filled_at": "2026-06-28T14:32:00.000Z", "realized_pnl": "17.50", "label": "Cierre long #1 — ganancia"}
+{"order_id": "ord-103", "symbol": "BTCUSDT", "side": "buy", "quantity": "0.050", "price": "60540.00", "commission": "3.03", "filled_at": "2026-06-28T18:05:00.000Z", "realized_pnl": null, "label": "Entrada long #2"}
+{"order_id": "ord-104", "symbol": "BTCUSDT", "side": "sell", "quantity": "0.050", "price": "60380.00", "commission": "3.02", "filled_at": "2026-06-29T05:18:00.000Z", "realized_pnl": "-11.02", "label": "Cierre long #2 — pérdida"}
