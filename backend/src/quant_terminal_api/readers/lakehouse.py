@@ -63,8 +63,8 @@ class LakehouseCandlesReader:
                 "Run: python scripts/bootstrap_market_data.py"
             )
 
-        self._duckdb_path.parent.mkdir(parents=True, exist_ok=True)
-        connection = duckdb.connect(str(self._duckdb_path))
+        # Conexión en memoria: evita bloqueos por escrituras concurrentes en catalog.duckdb.
+        connection = duckdb.connect(":memory:")
         try:
             paths_sql = ", ".join("'" + path.replace("'", "''") + "'" for path in parquet_files)
             connection.execute(

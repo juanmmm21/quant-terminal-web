@@ -20,6 +20,9 @@ from quant_terminal_api.readers.analysis import AnalysisCacheError, AnalysisCach
 
 router = APIRouter(tags=["health"])
 
+# Velas mínimas para precio y variación % en la barra superior (evita cargar 50k en cada refresh).
+_SUMMARY_CANDLE_LIMIT = 48
+
 
 @router.get("/health", response_model=HealthResponse)
 async def health(
@@ -41,7 +44,7 @@ async def summary(
     analysis_reader: Annotated[AnalysisCacheReader, Depends(get_analysis_reader)],
 ) -> TerminalSummaryResponse:
     timeframe = settings.default_timeframe
-    candles = candles_provider.load(timeframe=timeframe, limit=settings.candle_limit)
+    candles = candles_provider.load(timeframe=timeframe, limit=_SUMMARY_CANDLE_LIMIT)
     bot_status, _, _ = bot_state.snapshot()
 
     verdict = "hold"
