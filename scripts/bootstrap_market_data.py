@@ -69,8 +69,8 @@ def kline_to_tick(symbol: str, kline: list[object], index: int) -> dict[str, str
 
 def main() -> None:
     symbol = "BTCUSDT"
-    interval = "1h"
-    limit = 168
+    interval = "1m"
+    limit = 1000
     root = project_root()
     lake_root = root / "data" / "lake"
     ticks_path = root / "data" / "bootstrap_ticks.jsonl"
@@ -96,7 +96,9 @@ def main() -> None:
         "--symbol",
         symbol,
         "--timeframes",
-        interval,
+        "1m",
+        "5m",
+        "1h",
         "--flush-batch-size",
         "200",
     ]
