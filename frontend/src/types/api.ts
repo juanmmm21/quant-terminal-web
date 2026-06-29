@@ -32,7 +32,60 @@ export interface EquityPoint {
 
 export interface EquityCurve {
   symbol: string;
+  currency: string;
+  label: string;
+  initial_capital: string;
+  current_capital: string;
   points: EquityPoint[];
+}
+
+export interface Candle {
+  open_time: string;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+}
+
+export interface CandlesData {
+  symbol: string;
+  interval: string;
+  currency: string;
+  last_price: string;
+  change_pct: string;
+  candles: Candle[];
+}
+
+export interface TradeFill {
+  order_id: string;
+  symbol: string;
+  side: "buy" | "sell" | string;
+  quantity: string;
+  price: string;
+  commission: string;
+  filled_at: string;
+  realized_pnl: string | null;
+  label: string | null;
+}
+
+export interface TradesData {
+  trades: TradeFill[];
+  count: number;
+  closed_round_trips: number;
+}
+
+export interface TerminalSummary {
+  data_mode: string;
+  symbol: string;
+  last_price: string;
+  price_currency: string;
+  account_capital: string;
+  capital_currency: string;
+  capital_change: string;
+  trade_count: number;
+  bot_status: BotStatus;
+  last_sync: string;
 }
 
 export interface AuditEvent {
@@ -54,4 +107,5 @@ export interface HealthResponse {
   status: string;
   version: string;
   timestamp: string;
+  data_mode: string;
 }

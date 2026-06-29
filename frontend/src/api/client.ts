@@ -2,9 +2,12 @@ import type {
   AuditEventsResponse,
   BotActionResponse,
   BotStatusResponse,
+  CandlesData,
   EquityCurve,
   HealthResponse,
   PerformanceMetrics,
+  TerminalSummary,
+  TradesData,
 } from "../types/api";
 
 const API_BASE = "/api/v1";
@@ -41,6 +44,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<HealthResponse>("/health"),
+  summary: () => request<TerminalSummary>("/summary"),
   botStatus: () => request<BotStatusResponse>("/bot/status"),
   pauseBot: () => request<BotActionResponse>("/bot/pause", { method: "POST" }),
   resumeBot: () => request<BotActionResponse>("/bot/resume", { method: "POST" }),
@@ -49,8 +53,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ reason }),
     }),
+  resetBot: () => request<BotActionResponse>("/bot/reset", { method: "POST" }),
   metrics: () => request<PerformanceMetrics>("/metrics"),
   equityCurve: () => request<EquityCurve>("/equity-curve"),
+  candles: () => request<CandlesData>("/market/candles"),
+  trades: () => request<TradesData>("/trades"),
   auditEvents: (limit = 50) => request<AuditEventsResponse>(`/audit/events?limit=${limit}`),
 };
 
