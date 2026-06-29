@@ -1,0 +1,11 @@
+{
+  "symbol": "BTCUSDT",
+  "sharpe_ratio": "1.42",
+  "sortino_ratio": "2.10",
+  "profit_factor": "1.85",
+  "max_drawdown_pct": "0.00594",
+  "total_return_pct": "0.003",
+  "win_rate": "0.5",
+  "trade_count": 2,
+  "computed_at": "2024-01-02T12:00:00.000Z"
+}
