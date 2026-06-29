@@ -10,6 +10,7 @@ Uso (desde la raíz del repo):
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import shutil
 import signal
@@ -116,23 +117,37 @@ def _lakehouse_1h_bars() -> int:
     lake = _ROOT / "data" / "lake"
     if not lake.exists():
         return 0
-    parquet_files = list(lake.rglob("candles.parquet"))
+    parquet_files = [str(path) for path in lake.rglob("candles.parquet")]
     if not parquet_files:
         return 0
-    import duckdb
 
-    paths_sql = ", ".join("'" + str(path).replace("'", "''") + "'" for path in parquet_files)
-    connection = duckdb.connect()
+    paths_literal = json.dumps(parquet_files)
+    snippet = (
+        "import duckdb\n"
+        f"paths = {paths_literal}\n"
+        "paths_sql = ', '.join(\"'\" + p.replace(\"'\", \"''\") + \"'\" for p in paths)\n"
+        "row = duckdb.connect().execute(\n"
+        "    f\"SELECT COUNT(*) FROM read_parquet([{paths_sql}], union_by_name=true) "
+        "WHERE symbol = 'BTCUSDT' AND timeframe = '1h'\"\n"
+        ").fetchone()\n"
+        "print(int(row[0]) if row else 0)\n"
+    )
+    result = subprocess.run(
+        [str(_venv_python()), "-c", snippet],
+        capture_output=True,
+        text=True,
+        cwd=_ROOT,
+    )
+    if result.returncode != 0:
+        logging.warning(
+            "could not count 1h bars in lakehouse (%s); assuming bootstrap needed",
+            result.stderr.strip() or result.stdout.strip(),
+        )
+        return 0
     try:
-        row = connection.execute(
-            f"""
-            SELECT COUNT(*) FROM read_parquet([{paths_sql}], union_by_name=true)
-            WHERE symbol = 'BTCUSDT' AND timeframe = '1h'
-            """
-        ).fetchone()
-    finally:
-        connection.close()
-    return int(row[0]) if row else 0
+        return int(result.stdout.strip())
+    except ValueError:
+        return 0
 
 
 def _lakehouse_needs_bootstrap(*, min_1h_bars: int = 2000) -> bool:

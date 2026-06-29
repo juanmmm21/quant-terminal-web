@@ -117,11 +117,17 @@ def _training_score(signals: list[dict[str, Any]]) -> float:
     if not signals:
         return 0.0
     enters = [signal for signal in signals if signal.get("action") == "enter"]
-    exits = [signal for signal in signals if signal.get("action") == "exit"]
     if not enters:
         return float(len(signals)) * 0.01
     win_rate = _directional_win_rate(signals)
     return win_rate * 2.0 + min(len(signals), 50) * 0.01
+
+
+def select_recent_signals(signals: list[dict[str, Any]], *, limit: int = 120) -> list[dict[str, Any]]:
+    if limit <= 0 or not signals:
+        return []
+    ordered = sorted(signals, key=lambda item: str(item.get("event_time", "")))
+    return ordered[-limit:]
 
 
 def _directional_win_rate(signals: list[dict[str, Any]]) -> float:
@@ -356,7 +362,7 @@ def run_analysis(
             "selected_strategy": strategy,
             "trained_at": now,
         },
-        "signals": signals[-120:],
+        "signals": select_recent_signals(signals, limit=120),
     }
 
     output = runtime_dir() / f"analysis_{ui_timeframe}.json"

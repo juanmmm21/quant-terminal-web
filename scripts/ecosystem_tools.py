@@ -130,6 +130,14 @@ def export_lakehouse_candles_jsonl(
     if not isinstance(rows, list) or not rows:
         raise ValueError(f"no candles for {symbol} {timeframe}")
 
+    def _row_open_time(row: dict[str, object]) -> str:
+        open_time = row.get("open_time", row.get("close_time"))
+        if open_time is None:
+            return ""
+        return str(open_time).replace("Z", "+00:00")
+
+    rows.sort(key=_row_open_time)
+
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as handle:
         for row in rows:
