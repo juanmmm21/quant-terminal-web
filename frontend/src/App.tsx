@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, ApiError } from "./api/client";
 import { AuditFeed } from "./components/AuditFeed";
@@ -22,6 +22,22 @@ import type {
 const REFRESH_MS = 3_000;
 const CHART_CANDLE_LIMIT = 10_000;
 const TOAST_DURATION_MS = 5_000;
+const SILENT_ERROR_THRESHOLD = 3;
+
+type PartialErrorKey = "resumen" | "velas" | "análisis";
+
+function formatPartialErrors(keys: PartialErrorKey[]): string {
+  const labels: Record<PartialErrorKey, string> = {
+    resumen: "la barra superior",
+    velas: "el gráfico",
+    análisis: "la recomendación",
+  };
+  const parts = keys.map((key) => labels[key]);
+  if (parts.length === 1) {
+    return `No se pudo actualizar ${parts[0]}. Reintentando…`;
+  }
+  return `No se pudo actualizar ${parts.slice(0, -1).join(", ")} ni ${parts.at(-1)}. Reintentando…`;
+}
 
 type PendingAction = "panic" | "reset" | null;
 
@@ -54,6 +70,7 @@ export default function App() {
   const [apiVersion, setApiVersion] = useState<string>("");
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
+  const partialFailureStreakRef = useRef(0);
 
   const pushToast = useCallback((text: string, tone: ToastMessage["tone"] = "info") => {
     const id = crypto.randomUUID();
@@ -72,7 +89,7 @@ export default function App() {
       if (!silent) {
         setRefreshing(true);
       }
-      const errors: string[] = [];
+      const errors: PartialErrorKey[] = [];
       try {
         const results = await Promise.allSettled([
           api.health(),
@@ -124,7 +141,22 @@ export default function App() {
           setEvents(auditResult.value.events);
         }
 
-        setError(errors.length > 0 ? errors.join(", ") : null);
+        if (errors.length === 0) {
+          partialFailureStreakRef.current = 0;
+          setError(null);
+        } else {
+          const hasCachedView =
+            summary !== null && candles !== null && candles.candles.length > 0 && analysis !== null;
+          if (silent && hasCachedView) {
+            partialFailureStreakRef.current += 1;
+            if (partialFailureStreakRef.current >= SILENT_ERROR_THRESHOLD) {
+              setError(formatPartialErrors(errors));
+            }
+          } else {
+            partialFailureStreakRef.current = errors.length;
+            setError(formatPartialErrors(errors));
+          }
+        }
       } catch (err) {
         const raw = err instanceof ApiError ? err.message : "Failed to load dashboard data";
         setError(translateError(raw));

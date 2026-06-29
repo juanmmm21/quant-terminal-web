@@ -10,7 +10,12 @@ import {
 } from "lightweight-charts";
 
 import type { AnalysisSnapshot, Candle, Timeframe } from "../types/api";
-import { prepareChartCandles, toChartTime } from "../utils/chartData";
+import { prepareChartCandles, toChartTime, type ChartCandleBar } from "../utils/chartData";
+import {
+  applyDefaultViewport,
+  DEFAULT_VISIBLE_BARS,
+  MAX_CHART_MARKERS,
+} from "../utils/chartViewport";
 import { GLOSSARY } from "../utils/glossary";
 import { humanizeVerdict } from "../utils/humanize";
 import { formatDateTime, formatMoney } from "../utils/format";
@@ -38,23 +43,51 @@ interface TradingChartProps {
   onTimeframeChange: (timeframe: Timeframe) => void;
 }
 
+function buildChartMarkers(
+  signals: AnalysisSnapshot["signals"] | undefined,
+  bars: ChartCandleBar[],
+  timeframe: Timeframe,
+): SeriesMarker<Time>[] {
+  const visibleCount = Math.min(bars.length, DEFAULT_VISIBLE_BARS[timeframe]);
+  const visibleTimes = new Set(bars.slice(-visibleCount).map((bar) => bar.time));
+
+  const matched = (signals ?? [])
+    .map((signal) => ({ signal, time: toChartTime(signal.event_time) }))
+    .filter(({ time }) => visibleTimes.has(time))
+    .sort((left, right) => right.time - left.time)
+    .slice(0, MAX_CHART_MARKERS)
+    .sort((left, right) => left.time - right.time);
+
+  return matched.map(({ signal, time }) => {
+    const isBuy = signal.action === "enter";
+    return {
+      time,
+      position: isBuy ? "belowBar" : "aboveBar",
+      color: isBuy ? "#22c55e" : "#ef4444",
+      shape: isBuy ? "arrowUp" : "arrowDown",
+    };
+  });
+}
+
 function applySeriesData(
   candleSeries: ISeriesApi<"Candlestick">,
   volumeSeries: ISeriesApi<"Histogram">,
-  chart: IChartApi,
   candles: Candle[],
   analysis: AnalysisSnapshot | null,
+  timeframe: Timeframe,
   previousBarCount: number,
-): number {
+): { count: number; reloaded: boolean } {
   const bars = prepareChartCandles(candles);
   if (bars.length === 0) {
-    return 0;
+    return { count: 0, reloaded: false };
   }
 
   const canIncremental =
     previousBarCount > 0 &&
     bars.length >= previousBarCount &&
     bars.length - previousBarCount <= 2;
+
+  let reloaded = false;
 
   if (canIncremental && bars.length === previousBarCount) {
     const last = bars[bars.length - 1];
@@ -104,25 +137,10 @@ function applySeriesData(
         };
       }),
     );
-    chart.timeScale().fitContent();
+    reloaded = true;
   }
 
-  const candleTimes = new Set(bars.map((bar) => bar.time));
-  const markers: SeriesMarker<Time>[] = [];
-  for (const signal of analysis?.signals ?? []) {
-    const time = toChartTime(signal.event_time);
-    if (!candleTimes.has(time)) {
-      continue;
-    }
-    const isBuy = signal.action === "enter";
-    markers.push({
-      time,
-      position: isBuy ? "belowBar" : "aboveBar",
-      color: isBuy ? "#22c55e" : "#ef4444",
-      shape: isBuy ? "arrowUp" : "arrowDown",
-      text: isBuy ? "COMPRA" : "VENTA",
-    });
-  }
+  const markers = buildChartMarkers(analysis?.signals, bars, timeframe);
 
   try {
     candleSeries.setMarkers(markers);
@@ -130,7 +148,7 @@ function applySeriesData(
     candleSeries.setMarkers([]);
   }
 
-  return bars.length;
+  return { count: bars.length, reloaded };
 }
 
 export function TradingChart({
@@ -149,6 +167,8 @@ export function TradingChart({
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const barCountRef = useRef(0);
+  const userAdjustedViewportRef = useRef(false);
+  const suppressViewportTrackingRef = useRef(false);
   const [chartReady, setChartReady] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
 
@@ -173,7 +193,10 @@ export function TradingChart({
         horzLines: { color: "rgba(148, 163, 184, 0.08)" },
       },
       crosshair: { mode: CrosshairMode.Normal },
-      rightPriceScale: { borderColor: "rgba(148, 163, 184, 0.2)" },
+      rightPriceScale: {
+        borderColor: "rgba(148, 163, 184, 0.2)",
+        scaleMargins: { top: 0.08, bottom: 0.22 },
+      },
       timeScale: {
         borderColor: "rgba(148, 163, 184, 0.2)",
         timeVisible: true,
@@ -197,7 +220,15 @@ export function TradingChart({
       priceScaleId: "",
     });
     volumeSeries.priceScale().applyOptions({
-      scaleMargins: { top: 0.82, bottom: 0 },
+      scaleMargins: { top: 0.78, bottom: 0 },
+    });
+
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      if (suppressViewportTrackingRef.current) {
+        suppressViewportTrackingRef.current = false;
+        return;
+      }
+      userAdjustedViewportRef.current = true;
     });
 
     chartRef.current = chart;
@@ -224,6 +255,7 @@ export function TradingChart({
       volumeSeriesRef.current = null;
       setChartReady(false);
       barCountRef.current = 0;
+      userAdjustedViewportRef.current = false;
     };
   }, []);
 
@@ -237,18 +269,24 @@ export function TradingChart({
     if (!candleSeries || !volumeSeries || !chart) {
       return;
     }
-    barCountRef.current = applySeriesData(
+    const { count, reloaded } = applySeriesData(
       candleSeries,
       volumeSeries,
-      chart,
       candles,
       analysis,
+      timeframe,
       barCountRef.current,
     );
-  }, [chartReady, candles, analysis]);
+    barCountRef.current = count;
+    if (reloaded && !userAdjustedViewportRef.current) {
+      suppressViewportTrackingRef.current = true;
+      applyDefaultViewport(chart, count, timeframe);
+    }
+  }, [chartReady, candles, analysis, timeframe]);
 
   useLayoutEffect(() => {
     barCountRef.current = 0;
+    userAdjustedViewportRef.current = false;
   }, [timeframe]);
 
   useLayoutEffect(() => {
@@ -256,6 +294,15 @@ export function TradingChart({
       secondsVisible: timeframe === "1m",
     });
   }, [timeframe]);
+
+  const resetViewport = () => {
+    userAdjustedViewportRef.current = false;
+    const chart = chartRef.current;
+    if (chart && barCountRef.current > 0) {
+      suppressViewportTrackingRef.current = true;
+      applyDefaultViewport(chart, barCountRef.current, timeframe);
+    }
+  };
 
   const toggleFullscreen = async () => {
     const node = containerRef.current?.closest(".trading-chart-panel");
@@ -325,11 +372,7 @@ export function TradingChart({
           ))}
         </div>
         <div className="chart-toolbar-actions">
-          <button
-            type="button"
-            className="btn-ghost btn-sm"
-            onClick={() => chartRef.current?.timeScale().fitContent()}
-          >
+          <button type="button" className="btn-ghost btn-sm" onClick={resetViewport}>
             Ajustar zoom
           </button>
           <button type="button" className="btn-ghost btn-sm" onClick={() => void toggleFullscreen()}>

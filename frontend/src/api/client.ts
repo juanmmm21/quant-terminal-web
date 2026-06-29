@@ -22,9 +22,12 @@ class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(
+  path: string,
+  init?: RequestInit & { timeoutMs?: number },
+): Promise<T> {
   const controller = new AbortController();
-  const timeoutMs = 12_000;
+  const timeoutMs = init?.timeoutMs ?? 12_000;
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${API_BASE}${path}`, {
@@ -73,6 +76,7 @@ export const api = {
   candles: (timeframe: Timeframe, limit = 10_000) =>
     request<CandlesData>(
       `/market/candles?timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`,
+      { timeoutMs: 45_000 },
     ),
   analysisSnapshot: (timeframe: Timeframe) =>
     request<AnalysisSnapshot>(`/analysis/snapshot?timeframe=${encodeURIComponent(timeframe)}`),
