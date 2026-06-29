@@ -54,6 +54,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [apiVersion, setApiVersion] = useState<string>("");
+  const [dataMode, setDataMode] = useState<string>("demo");
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
 
@@ -73,17 +74,9 @@ export default function App() {
     if (!silent) {
       setRefreshing(true);
     }
+    const errors: string[] = [];
     try {
-      const [
-        health,
-        summaryData,
-        status,
-        metricsData,
-        equityData,
-        candlesData,
-        tradesData,
-        auditData,
-      ] = await Promise.all([
+      const results = await Promise.allSettled([
         api.health(),
         api.summary(),
         api.botStatus(),
@@ -93,18 +86,75 @@ export default function App() {
         api.trades(),
         api.auditEvents(20),
       ]);
-      setApiVersion(health.version);
-      setSummary(summaryData);
-      setBotStatus(status.status);
-      setBotUpdatedAt(status.updated_at);
-      setBotMessage(status.message);
-      setMetrics(metricsData);
-      setEquity(equityData);
-      setCandles(candlesData);
-      setTrades(tradesData.trades);
-      setClosedRoundTrips(tradesData.closed_round_trips);
-      setEvents(auditData.events);
-      setError(null);
+
+      const [
+        healthResult,
+        summaryResult,
+        statusResult,
+        metricsResult,
+        equityResult,
+        candlesResult,
+        tradesResult,
+        auditResult,
+      ] = results;
+
+      if (healthResult.status === "fulfilled") {
+        setApiVersion(healthResult.value.version);
+        setDataMode(healthResult.value.data_mode);
+      }
+
+      if (summaryResult.status === "fulfilled") {
+        setSummary(summaryResult.value);
+      } else {
+        errors.push("resumen");
+      }
+
+      if (statusResult.status === "fulfilled") {
+        setBotStatus(statusResult.value.status);
+        setBotUpdatedAt(statusResult.value.updated_at);
+        setBotMessage(statusResult.value.message);
+      }
+
+      if (metricsResult.status === "fulfilled") {
+        setMetrics(metricsResult.value);
+      } else {
+        errors.push("métricas");
+      }
+
+      if (equityResult.status === "fulfilled") {
+        setEquity(equityResult.value);
+      } else {
+        errors.push("capital");
+      }
+
+      if (candlesResult.status === "fulfilled") {
+        setCandles(candlesResult.value);
+      } else {
+        errors.push("velas");
+      }
+
+      if (tradesResult.status === "fulfilled") {
+        setTrades(tradesResult.value.trades);
+        setClosedRoundTrips(tradesResult.value.closed_round_trips);
+      } else {
+        errors.push("operaciones");
+      }
+
+      if (auditResult.status === "fulfilled") {
+        setEvents(auditResult.value.events);
+      } else {
+        errors.push("auditoría");
+      }
+
+      if (errors.length > 0 && errors.length === results.length - 1) {
+        setError(
+          `Faltan datos: ${errors.join(", ")}. Ejecuta python3 scripts/run_ecosystem_pipeline.py`,
+        );
+      } else if (errors.length > 0) {
+        setError(`No se cargaron: ${errors.join(", ")}`);
+      } else {
+        setError(null);
+      }
     } catch (err) {
       const raw = err instanceof ApiError ? err.message : "Failed to load dashboard data";
       setError(translateError(raw));
@@ -162,18 +212,36 @@ export default function App() {
         />
       ) : null}
 
-      <div className={summary?.data_mode === "live" ? "info-banner" : "demo-banner"} role="note">
-        {summary?.data_mode === "live" ? (
+      <div
+        className={
+          dataMode === "ecosystem"
+            ? "ecosystem-banner"
+            : dataMode === "live"
+              ? "info-banner"
+              : "demo-banner"
+        }
+        role="note"
+      >
+        {dataMode === "ecosystem" ? (
           <>
-            <strong>Datos live:</strong> velas desde <code>market-data-lakehouse</code> (Parquet/DuckDB)
-            y último precio desde <code>data/live/ticks.jsonl</code> (puente WebSocket). El capital de
-            cuenta sigue viniendo de métricas/backtest, no del precio de BTC.
+            <strong>Ecosistema conectado:</strong> métricas, operaciones y auditoría generadas por el
+            pipeline real (lakehouse → señales → riesgo → paper routing → métricas). Velas desde{" "}
+            <code>market-data-lakehouse</code>; precio live desde <code>data/live/ticks.jsonl</code>.
+            Pánico/pausa afectan a <code>paper_bot_runner.py</code>.
+          </>
+        ) : dataMode === "live" ? (
+          <>
+            <strong>Datos live (parcial):</strong> velas desde <code>market-data-lakehouse</code> y
+            último precio desde ticks live. Ejecuta{" "}
+            <code>python3 scripts/run_ecosystem_pipeline.py</code> para conectar métricas, trades y
+            auditoría del ecosistema.
           </>
         ) : (
           <>
             <strong>Modo demo:</strong> ejecuta{" "}
-            <code>python scripts/bootstrap_market_data.py</code> para materializar velas reales en el
-            lakehouse y <code>python scripts/tick_bridge.py</code> para precio live.
+            <code>python3 scripts/bootstrap_market_data.py</code> y luego{" "}
+            <code>python3 scripts/run_ecosystem_pipeline.py</code> para materializar datos reales del
+            ecosistema. Opcional: <code>python3 scripts/tick_bridge.py</code> para precio live.
           </>
         )}
       </div>

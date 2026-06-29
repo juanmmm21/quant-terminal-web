@@ -186,8 +186,19 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.ecosystem-banner {
+  margin-bottom: 0.85rem;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  background: #e8f0ff;
+  border: 1px solid #b8c9f5;
+  color: #1a3a7a;
+  font-size: 0.9rem;
+}
+
 .info-banner code,
-.demo-banner code {
+.demo-banner code,
+.ecosystem-banner code {
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.82rem;
 }

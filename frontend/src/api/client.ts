@@ -3,6 +3,7 @@ import type {
   BotActionResponse,
   BotStatusResponse,
   CandlesData,
+  EcosystemStatus,
   EquityCurve,
   HealthResponse,
   PerformanceMetrics,
@@ -59,6 +60,7 @@ export const api = {
   candles: () => request<CandlesData>("/market/candles"),
   trades: () => request<TradesData>("/trades"),
   auditEvents: (limit = 50) => request<AuditEventsResponse>(`/audit/events?limit=${limit}`),
+  ecosystemStatus: () => request<EcosystemStatus>("/ecosystem/status"),
 };
 
 export { ApiError };

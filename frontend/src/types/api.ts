@@ -109,3 +109,14 @@ export interface HealthResponse {
   timestamp: string;
   data_mode: string;
 }
+
+export interface EcosystemStatus {
+  data_mode: string;
+  ecosystem_ready: boolean;
+  lakehouse_ready: boolean;
+  live_ticks_ready: boolean;
+  paths: Record<string, string>;
+  modules: Record<string, string>;
+  manifest: Record<string, unknown> | null;
+  last_checked: string;
+}
