@@ -28,3 +28,4 @@ samples/bot_state.json
 # Env
 .env
 .env.*
+!.env.example

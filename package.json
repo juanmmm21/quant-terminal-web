@@ -7,6 +7,10 @@
     "dev": "npm run dev --prefix frontend",
     "build": "npm run build --prefix frontend",
     "preview": "npm run preview --prefix frontend",
-    "install:frontend": "npm install --prefix frontend"
+    "install:frontend": "npm install --prefix frontend",
+    "ecosystem:pipeline": "python3 scripts/run_ecosystem_pipeline.py",
+    "ecosystem:bot": "python3 scripts/paper_bot_runner.py",
+    "market:bootstrap": "python3 scripts/bootstrap_market_data.py",
+    "market:ticks": "python3 scripts/tick_bridge.py"
   }
 }

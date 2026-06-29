@@ -17,14 +17,19 @@ Los módulos backend del ecosistema (backtester, métricas, auditoría, routing)
 ## Rol en quant-core-infra
 
 ```text
-websocket-feed-handler ──► ticks JSONL ──┐
-market-data-lakehouse ──► Parquet/DuckDB ─┼──► quant-terminal-web API
-quant-metrics-calculator ──► metrics.json ─┤         │
-trade-audit-logger ──► audit.db ──────────┤         ▼
-event-driven-backtester ──► fills ────────┘    React dashboard
-                                                          │
-                                                          ▼
-                                               quant-terminal-ios (misma API)
+ticks JSONL ──► market-data-lakehouse ──► ta-indicators ──► alpha-signal-generator
+      │                                              │
+      │                                              ▼
+      │                                    risk-management-engine
+      │                                              │
+      │                                              ▼
+      └──────────────────────────────► order-routing-gateway (paper)
+                                                     │
+                     quant-metrics-calculator ◄──────┤
+                     trade-audit-logger ◄────────────┘
+                              │
+                              ▼
+                     data/ecosystem/ ──► quant-terminal-web API ──► React
 ```
 
 ---
@@ -34,28 +39,39 @@ event-driven-backtester ──► fills ────────┘    React das
 Demuestra:
 
 - API REST tipada con FastAPI y contratos Pydantic estables
-- Lectura desacoplada de SQLite (`trade-audit-logger`), JSON (`quant-metrics-calculator`) y Parquet (`market-data-lakehouse`)
-- **Precio BTC live** desde ticks WebSocket (puente compatible con `websocket-feed-handler`), no hardcodeado
-- Estado de bot (`running` / `paused` / `panic`) con persistencia, reset y UX en español
-- Frontend React + TypeScript + Vite: velas OHLCV, tabla de operaciones, métricas y auditoría
-- Precisión financiera: balances y PnL como `string` en API (sin `float` en dinero)
+- **Pipeline real del ecosistema** vía subprocess (7 módulos) → `data/ecosystem/`
+- Lectura desacoplada de SQLite, JSON, Parquet y JSONL (sin imports cruzados)
+- **Precio BTC live** desde `data/live/ticks.jsonl` (puente WebSocket)
+- Paper trading con `order-routing-gateway`; pánico/pausa vía `paper_bot_runner.py`
+- Frontend React + TypeScript + Vite con carga resiliente por panel
 
 ---
 
 ## Cómo funciona
 
-1. **Velas:** la API consulta `data/lake/` (salida de `market-data-lakehouse`) vía DuckDB.
-2. **Último precio:** lee el último tick de `data/live/ticks.jsonl` (escrito por `scripts/tick_bridge.py`).
-3. **Métricas / equity / trades:** leen JSON/JSONL de `samples/` o rutas `TERMINAL_*` configurables.
-4. **Auditoría:** query directa a SQLite de `trade-audit-logger`.
-5. **Frontend:** polling cada 10s, gráfico de velas, operaciones visibles y controles del bot.
+1. **Pipeline ecosistema** (`scripts/run_ecosystem_pipeline.py`): encadena los CLIs de los módulos vecinos y escribe en `data/ecosystem/`:
+   - `market-data-lakehouse` → velas Parquet
+   - `ta-indicators-from-scratch` → RSI/MACD sobre velas
+   - `alpha-signal-generator` → señales (prueba `rsi_mean_reversion`, luego `macd_crossover`)
+   - `risk-management-engine` → validación pre-trade
+   - `order-routing-gateway` → fills en modo **paper**
+   - `quant-metrics-calculator` → Sharpe, drawdown, etc.
+   - `trade-audit-logger` → SQLite de auditoría
+2. **API:** si existe `data/ecosystem/`, usa esos archivos automáticamente; si no, `samples/`.
+3. **Velas:** DuckDB sobre Parquet en `data/lake/`.
+4. **Último precio:** último tick de `data/live/ticks.jsonl`.
+5. **Bot en paper** (`scripts/paper_bot_runner.py`): re-ejecuta el pipeline cuando llegan ticks nuevos; respeta `bot_state.json` (pánico/pausa).
+6. **Frontend:** polling cada 10s con `Promise.allSettled` (un panel caído no tumba todo el dashboard).
 
-Modos:
+Modos (`data_mode`):
 
 | Modo | Condición | UI |
 |------|-----------|-----|
-| `demo` | Sin Parquet en `data/lake/` | Banner con instrucciones de bootstrap |
-| `live` | Lakehouse materializado | Precio y velas de mercado reales |
+| `demo` | Sin lakehouse ni ecosistema | Banner con instrucciones |
+| `live` | Lakehouse OK, sin `data/ecosystem/` | Velas/precio reales; métricas aún en samples |
+| `ecosystem` | Pipeline ejecutado | Todos los paneles alimentados por módulos reales |
+
+Consulta `GET /api/v1/ecosystem/status` para ver rutas activas y módulos conectados.
 
 ---
 
@@ -69,16 +85,20 @@ quant-terminal-web/
 │   │   ├── lakehouse.py   # Parquet → DuckDB (market-data-lakehouse)
 │   │   ├── live_ticks.py  # último tick JSONL
 │   │   └── market.py      # combina lakehouse + live
-│   ├── routes/            # health, bot, metrics, market, trades, audit
+│   ├── routes/            # health, bot, metrics, market, trades, audit, ecosystem
 │   └── bot_state.py
 ├── frontend/src/
 │   ├── components/        # CandlestickChart, TradesTable, TopBar, …
 │   └── api/client.ts
 ├── scripts/
-│   ├── bootstrap_market_data.py  # Binance klines → lakehouse ingest
-│   └── tick_bridge.py              # WebSocket → ticks.jsonl
-├── samples/               # demo: audit, metrics, equity, trades
-├── data/                  # runtime: lake/ + live/ (gitignored)
+│   ├── bootstrap_market_data.py      # Binance klines → lakehouse ingest
+│   ├── tick_bridge.py                # WebSocket → ticks.jsonl
+│   ├── run_ecosystem_pipeline.py     # pipeline completo → data/ecosystem/
+│   ├── paper_bot_runner.py           # re-sync al llegar ticks; respeta pánico
+│   ├── ecosystem_tools.py            # utilidades y transformaciones JSON
+│   └── start_stack.sh                # arranque guiado (bootstrap + pipeline + UI)
+├── samples/               # demo estático (fallback)
+├── data/                  # runtime: lake/, live/, ecosystem/ (gitignored)
 └── package.json           # npm run dev desde la raíz
 ```
 
@@ -88,7 +108,9 @@ quant-terminal-web/
 
 - Python **3.11+** (`python3` y `pip3` en macOS; o venv con `source .venv/bin/activate`)
 - Node.js **20+**
-- [`market-data-lakehouse`](../market-data-lakehouse) instalado para materializar velas
+- [`market-data-lakehouse`](../market-data-lakehouse) y, para el pipeline completo, los CLIs de:
+  `ta-indicators-from-scratch`, `alpha-signal-generator`, `risk-management-engine`,
+  `order-routing-gateway`, `quant-metrics-calculator`, `trade-audit-logger`
 - SQLite (stdlib)
 
 ---
@@ -129,6 +151,31 @@ cd ../market-data-lakehouse && python3 -m pip install -e . && cd ../quant-termin
 # Materializa Parquet en data/lake/ (subprocess, sin imports cruzados)
 python3 scripts/bootstrap_market_data.py
 ```
+
+### Pipeline ecosistema (métricas, trades y auditoría reales)
+
+Requiere los CLIs de los módulos vecinos instalados en PATH o en su `.venv` (el script los resuelve automáticamente).
+
+```bash
+cd quant-terminal-web
+
+# 1. Velas en lakehouse (si aún no existen)
+python3 scripts/bootstrap_market_data.py
+
+# 2. Ticks live (opcional, mejora fills paper)
+python3 -m pip install websockets
+python3 scripts/tick_bridge.py &
+
+# 3. Pipeline completo → data/ecosystem/
+python3 scripts/run_ecosystem_pipeline.py
+
+# 4. Bot paper que re-sincroniza al llegar ticks (opcional)
+python3 scripts/paper_bot_runner.py &
+```
+
+Atajo: `chmod +x scripts/start_stack.sh && ./scripts/start_stack.sh`
+
+Tras el pipeline, reinicia la API: `data_mode` pasará a `ecosystem`.
 
 ### Precio live (opcional)
 
