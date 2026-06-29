@@ -10,23 +10,22 @@ Repositorio: [github.com/juanmmm21/quant-terminal-web](https://github.com/juanmm
 
 Los módulos backend del ecosistema (backtester, métricas, auditoría, routing) producen datos valiosos, pero no son operables por un humano sin una capa de visualización y control.
 
-`quant-terminal-web` cierra ese gap: es la **consola operativa** que lee datos del ecosistema sin imports cruzados entre repos, y ofrece la misma API que consumirá `quant-terminal-ios`.
+`quant-terminal-web` cierra ese gap: es la **consola operativa** que lee datos del ecosistema **sin imports cruzados** entre repos (solo JSON, SQLite, Parquet y subprocess), y ofrece la misma API que consumirá `quant-terminal-ios`.
 
 ---
 
 ## Rol en quant-core-infra
 
 ```text
-quant-metrics-calculator ──► metrics.json / equity.json ──┐
-trade-audit-logger ──► audit.db (SQLite) ─────────────────┤
-order-routing-gateway / estrategia ──► bot state ─────────┼──► quant-terminal-web
-                                                          │         │
-                                                          │    React UI
+websocket-feed-handler ──► ticks JSONL ──┐
+market-data-lakehouse ──► Parquet/DuckDB ─┼──► quant-terminal-web API
+quant-metrics-calculator ──► metrics.json ─┤         │
+trade-audit-logger ──► audit.db ──────────┤         ▼
+event-driven-backtester ──► fills ────────┘    React dashboard
+                                                          │
                                                           ▼
                                                quant-terminal-ios (misma API)
 ```
-
-Es la **interfaz de control** del pipeline cuantitativo.
 
 ---
 
@@ -35,21 +34,28 @@ Es la **interfaz de control** del pipeline cuantitativo.
 Demuestra:
 
 - API REST tipada con FastAPI y contratos Pydantic estables
-- Lectura desacoplada de SQLite (`trade-audit-logger`) y JSON (`quant-metrics-calculator`)
-- Estado de bot (`running` / `paused` / `panic`) con persistencia local
-- Frontend React + TypeScript + Vite sin lógica de trading en el cliente
+- Lectura desacoplada de SQLite (`trade-audit-logger`), JSON (`quant-metrics-calculator`) y Parquet (`market-data-lakehouse`)
+- **Precio BTC live** desde ticks WebSocket (puente compatible con `websocket-feed-handler`), no hardcodeado
+- Estado de bot (`running` / `paused` / `panic`) con persistencia, reset y UX en español
+- Frontend React + TypeScript + Vite: velas OHLCV, tabla de operaciones, métricas y auditoría
 - Precisión financiera: balances y PnL como `string` en API (sin `float` en dinero)
 
 ---
 
 ## Cómo funciona
 
-1. **Backend** (`quant-terminal-api`) arranca un servidor FastAPI que expone endpoints bajo `/api/v1`.
-2. **Readers** leen archivos configurables (`TERMINAL_AUDIT_DB_PATH`, `TERMINAL_METRICS_PATH`, `TERMINAL_EQUITY_PATH`).
-3. **Bot state** se guarda en `bot_state.json` (por defecto en `samples/`) y responde a pause/resume/panic.
-4. **Frontend** hace polling cada 10s y renderiza métricas, curva de equidad, feed de auditoría y controles.
+1. **Velas:** la API consulta `data/lake/` (salida de `market-data-lakehouse`) vía DuckDB.
+2. **Último precio:** lee el último tick de `data/live/ticks.jsonl` (escrito por `scripts/tick_bridge.py`).
+3. **Métricas / equity / trades:** leen JSON/JSONL de `samples/` o rutas `TERMINAL_*` configurables.
+4. **Auditoría:** query directa a SQLite de `trade-audit-logger`.
+5. **Frontend:** polling cada 10s, gráfico de velas, operaciones visibles y controles del bot.
 
-En v1 los datos de muestra en `samples/` permiten ejecutar el dashboard sin cablear el ecosistema live.
+Modos:
+
+| Modo | Condición | UI |
+|------|-----------|-----|
+| `demo` | Sin Parquet en `data/lake/` | Banner con instrucciones de bootstrap |
+| `live` | Lakehouse materializado | Precio y velas de mercado reales |
 
 ---
 
@@ -57,40 +63,33 @@ En v1 los datos de muestra en `samples/` permiten ejecutar el dashboard sin cabl
 
 ```text
 quant-terminal-web/
-├── backend/
-│   └── src/quant_terminal_api/
-│       ├── models.py          # contratos Pydantic (API pública)
-│       ├── config.py          # TerminalSettings (env TERMINAL_*)
-│       ├── bot_state.py       # estado del bot (thread-safe + JSON)
-│       ├── readers/           # SQLite audit + JSON metrics/equity
-│       ├── routes/            # health, bot, metrics, audit
-│       ├── app.py             # FastAPI factory
-│       └── __main__.py        # CLI uvicorn
-├── frontend/
-│   └── src/
-│       ├── api/client.ts      # cliente REST tipado
-│       ├── components/        # UI dashboard
-│       └── App.tsx
-└── samples/                   # datos demo del ecosistema
+├── backend/src/quant_terminal_api/
+│   ├── readers/
+│   │   ├── data.py        # audit, metrics, equity, trades
+│   │   ├── lakehouse.py   # Parquet → DuckDB (market-data-lakehouse)
+│   │   ├── live_ticks.py  # último tick JSONL
+│   │   └── market.py      # combina lakehouse + live
+│   ├── routes/            # health, bot, metrics, market, trades, audit
+│   └── bot_state.py
+├── frontend/src/
+│   ├── components/        # CandlestickChart, TradesTable, TopBar, …
+│   └── api/client.ts
+├── scripts/
+│   ├── bootstrap_market_data.py  # Binance klines → lakehouse ingest
+│   └── tick_bridge.py              # WebSocket → ticks.jsonl
+├── samples/               # demo: audit, metrics, equity, trades
+├── data/                  # runtime: lake/ + live/ (gitignored)
+└── package.json           # npm run dev desde la raíz
 ```
-
-### Componentes backend
-
-| Módulo | Responsabilidad |
-|--------|-----------------|
-| `readers/data.py` | Query SQLite audit, parse metrics/equity JSON |
-| `bot_state.py` | Transiciones running/paused/panic + persistencia |
-| `routes/bot.py` | POST panic/pause/resume, GET status |
-| `routes/metrics.py` | GET metrics, GET equity-curve |
-| `routes/audit.py` | GET audit/events con filtros |
 
 ---
 
 ## Requisitos
 
-- Python **3.11+**
-- Node.js **20+** (para el frontend)
-- SQLite (stdlib, para lectura de audit)
+- Python **3.11+** (`python3` y `pip3` en macOS; o venv con `source .venv/bin/activate`)
+- Node.js **20+**
+- [`market-data-lakehouse`](../market-data-lakehouse) instalado para materializar velas
+- SQLite (stdlib)
 
 ---
 
@@ -100,30 +99,50 @@ quant-terminal-web/
 
 ```bash
 cd quant-terminal-web/backend
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+python3 -m pip install -e ".[dev]"
 ```
 
 ### Frontend
 
 ```bash
-cd quant-terminal-web/frontend
-npm install
+cd quant-terminal-web
+npm run install:frontend
 ```
 
-### Datos de muestra
+(o `cd frontend && npm install`)
+
+### Datos de auditoría demo
 
 ```bash
 cd quant-terminal-web
-python samples/build_audit_db.py
+python3 samples/build_audit_db.py
+```
+
+### Velas de mercado (lakehouse)
+
+```bash
+# Instalar lakehouse si no está en PATH
+cd ../market-data-lakehouse && python3 -m pip install -e . && cd ../quant-terminal-web
+
+# Materializa Parquet en data/lake/ (subprocess, sin imports cruzados)
+python3 scripts/bootstrap_market_data.py
+```
+
+### Precio live (opcional)
+
+```bash
+source backend/.venv/bin/activate
+python3 -m pip install websockets
+python3 scripts/tick_bridge.py
 ```
 
 ---
 
 ## Uso
 
-### Arrancar API
+### API
 
 ```bash
 cd backend
@@ -131,25 +150,29 @@ source .venv/bin/activate
 quant-terminal-api --host 127.0.0.1 --port 8000
 ```
 
-Variables de entorno opcionales:
-
-| Variable | Default | Descripción |
-|----------|---------|-------------|
-| `TERMINAL_AUDIT_DB_PATH` | `samples/audit.db` | SQLite de `trade-audit-logger` |
-| `TERMINAL_METRICS_PATH` | `samples/metrics.json` | Salida de `quant-metrics-calculator` |
-| `TERMINAL_EQUITY_PATH` | `samples/equity.json` | Curva de equidad JSON |
-| `TERMINAL_BOT_STATE_PATH` | `samples/bot_state.json` | Estado persistido del bot |
-| `TERMINAL_HOST` | `127.0.0.1` | Bind host |
-| `TERMINAL_PORT` | `8000` | Bind port |
-
-### Arrancar UI
+### UI (desde la raíz del proyecto)
 
 ```bash
-cd frontend
+cd quant-terminal-web
 npm run dev
 ```
 
 Abre [http://localhost:5173](http://localhost:5173). Vite proxifica `/api` al backend en `:8000`.
+
+### Variables de entorno (`TERMINAL_*`)
+
+| Variable | Default | Descripción |
+|----------|---------|-------------|
+| `TERMINAL_LAKEHOUSE_ROOT` | `data/lake` | Raíz Parquet de `market-data-lakehouse` |
+| `TERMINAL_LAKEHOUSE_DUCKDB` | `data/lake/catalog.duckdb` | Catálogo DuckDB |
+| `TERMINAL_TICKS_JSONL_PATH` | `data/live/ticks.jsonl` | Último precio live |
+| `TERMINAL_CANDLE_SYMBOL` | `BTCUSDT` | Símbolo de velas |
+| `TERMINAL_CANDLE_TIMEFRAME` | `1h` | Timeframe (`1m`, `5m`, `1h`) |
+| `TERMINAL_AUDIT_DB_PATH` | `samples/audit.db` | SQLite de `trade-audit-logger` |
+| `TERMINAL_METRICS_PATH` | `samples/metrics.json` | Salida de `quant-metrics-calculator` |
+| `TERMINAL_EQUITY_PATH` | `samples/equity.json` | Capital de cuenta (USDT, no precio BTC) |
+| `TERMINAL_TRADES_PATH` | `samples/trades.jsonl` | Fills del backtester |
+| `TERMINAL_BOT_STATE_PATH` | `samples/bot_state.json` | Estado del bot |
 
 ---
 
@@ -157,98 +180,66 @@ Abre [http://localhost:5173](http://localhost:5173). Vite proxifica `/api` al ba
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
-| `GET` | `/health` | Healthcheck + versión |
-| `GET` | `/bot/status` | Estado actual (`running` \| `paused` \| `panic`) |
-| `POST` | `/bot/panic` | Parada de emergencia (`{"reason": "..."}`) |
-| `POST` | `/bot/pause` | Pausa operativa |
-| `POST` | `/bot/resume` | Reanuda operativa |
+| `GET` | `/health` | Healthcheck + `data_mode` (`demo` \| `live`) |
+| `GET` | `/summary` | Barra superior: precio, capital, trades, estado bot |
+| `GET` | `/bot/status` | Estado (`running` \| `paused` \| `panic`) |
+| `POST` | `/bot/panic` | Parada de emergencia |
+| `POST` | `/bot/pause` | Pausa |
+| `POST` | `/bot/resume` | Reanuda |
+| `POST` | `/bot/reset` | Sale de pánico → `running` |
 | `GET` | `/metrics` | Sharpe, Sortino, profit factor, drawdown |
-| `GET` | `/equity-curve` | Serie `{event_time, equity}` |
-| `GET` | `/audit/events` | Últimos N eventos (`?limit=50&event_type=&symbol=`) |
+| `GET` | `/equity-curve` | Capital de cuenta en USDT |
+| `GET` | `/market/candles` | Velas OHLCV desde lakehouse |
+| `GET` | `/trades` | Operaciones ejecutadas (fills) |
+| `GET` | `/audit/events` | Eventos de auditoría |
 
-### Ejemplo: métricas
+### Capital vs precio BTC
 
-```bash
-curl -s http://127.0.0.1:8000/api/v1/metrics | jq
+- **`/market/candles`** y **`/summary.last_price`** → precio de mercado del activo (BTC/USDT).
+- **`/equity-curve`** y **`/summary.account_capital`** → saldo de la cuenta en USDT del backtest, **no** el precio de BTC.
+
+---
+
+## Formatos de datos
+
+### Ticks live (compatible con lakehouse / websocket-feed-handler)
+
+```json
+{
+  "exchange": "binance",
+  "symbol": "BTCUSDT",
+  "trade_id": "123",
+  "price": "60152.00",
+  "quantity": "0.01",
+  "side": "buy",
+  "event_time": "2026-06-29T10:00:00.000Z"
+}
 ```
+
+### Equity (capital de cuenta)
 
 ```json
 {
   "symbol": "BTCUSDT",
-  "sharpe_ratio": "1.42",
-  "sortino_ratio": "2.10",
-  "profit_factor": "1.85",
-  "max_drawdown_pct": "0.00594",
-  "total_return_pct": "0.003",
-  "win_rate": "0.5",
-  "trade_count": 2,
-  "computed_at": "2024-01-02T12:00:00.000Z"
+  "currency": "USDT",
+  "label": "Capital total de la cuenta (no es el precio de BTC)",
+  "initial_capital": "10000.00",
+  "current_capital": "10330.00",
+  "equity_curve": [{"event_time": "...", "equity": "10000.00"}]
 }
-```
-
-### Ejemplo: pánico
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v1/bot/panic \
-  -H 'Content-Type: application/json' \
-  -d '{"reason": "operator halt"}'
-```
-
----
-
-## Formatos de datos (ecosistema)
-
-### Métricas (`quant-metrics-calculator`)
-
-Valores monetarios y ratios como **strings** para evitar pérdida de precisión.
-
-### Equity curve
-
-```json
-{
-  "symbol": "BTCUSDT",
-  "equity_curve": [
-    {"event_time": "2024-01-01T12:00:00.000Z", "equity": "10000.00"}
-  ]
-}
-```
-
-### Auditoría (`trade-audit-logger` SQLite)
-
-La API consulta la tabla `audit_events` con el mismo esquema que el módulo de auditoría. No importa código Python entre repos.
-
----
-
-## Uso programático
-
-```python
-from quant_terminal_api.app import create_app
-from quant_terminal_api.config import TerminalSettings
-
-settings = TerminalSettings(
-    audit_db_path="samples/audit.db",
-    metrics_path="samples/metrics.json",
-    equity_path="samples/equity.json",
-).resolve_paths()
-
-app = create_app(settings)
-# Despliega con uvicorn o TestClient para integración
 ```
 
 ---
 
 ## Desarrollo
 
-### Backend
-
 ```bash
 cd backend
+source .venv/bin/activate
 pytest -q
 ruff check src tests
 mypy src
 ```
-
-### Frontend
 
 ```bash
 cd frontend
@@ -261,20 +252,23 @@ npm run build
 
 | Síntoma | Causa probable | Solución |
 |---------|----------------|----------|
-| `503` en `/audit/events` | `audit.db` no existe | Ejecuta `python samples/build_audit_db.py` |
-| UI sin datos | API no arrancada | Inicia `quant-terminal-api` en `:8000` |
-| `409` al resume tras panic | Estado panic es terminal en v1 | Borra o edita `bot_state.json` manualmente |
-| CORS bloqueado | Origen distinto a `:5173` | Añade origen en `TERMINAL_CORS_ORIGINS` (futuro) o usa proxy Vite |
+| `zsh: command not found: pip` | macOS sin `pip` en PATH | Usa `python3 -m pip` o `source .venv/bin/activate` |
+| `npm run dev` ENOENT en raíz | `package.json` solo en `frontend/` | Usa `npm run dev` desde raíz (hay delegación) o `cd frontend` |
+| `503` en `/market/candles` | Lakehouse vacío | `python3 scripts/bootstrap_market_data.py` |
+| Modo `demo` en UI | Sin `candles.parquet` en `data/lake/` | Ejecuta bootstrap del lakehouse |
+| `409` al resume tras panic | Pánico es terminal hasta reset | Pulsa «Reiniciar bot» o `POST /bot/reset` |
+| Precio no actualiza en live | `tick_bridge.py` no corre | Arranca `python3 scripts/tick_bridge.py` |
 
 ---
 
 ## Roadmap
 
-- [ ] WebSocket/SSE para feed de auditoría en tiempo real
-- [ ] Autenticación (API key / OAuth) antes de exponer panic en producción
+- [x] Velas desde `market-data-lakehouse` (sin precio hardcodeado)
+- [x] UX español + reset de pánico + tabla de operaciones
+- [ ] WebSocket/SSE para auditoría en tiempo real
+- [ ] Autenticación antes de exponer panic en producción
 - [ ] Integración live con `order-routing-gateway` para halt real
-- [ ] Tema claro y responsive mobile-first
-- [ ] Docker Compose (API + UI + volumen audit)
+- [ ] Docker Compose (API + UI + lakehouse volume)
 
 ---
 
