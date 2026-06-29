@@ -22,7 +22,6 @@ frontend/dist/
 # Runtime data
 data/
 samples/bot_state.json
-*.db-journal
 *.db-wal
 *.db-shm
 
