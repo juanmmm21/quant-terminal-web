@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -10,14 +9,14 @@ from quant_terminal_api import __version__
 from quant_terminal_api.bot_state import BotStateStore
 from quant_terminal_api.config import TerminalSettings
 from quant_terminal_api.dependencies import (
+    get_analysis_reader,
     get_bot_state,
     get_candles_reader,
-    get_equity_reader,
-    get_metrics_reader,
     get_settings,
 )
 from quant_terminal_api.models import HealthResponse, TerminalSummaryResponse
-from quant_terminal_api.readers import EquityReader, MarketCandlesProvider, MetricsReader
+from quant_terminal_api.readers import MarketCandlesProvider
+from quant_terminal_api.readers.analysis import AnalysisCacheError, AnalysisCacheReader
 
 router = APIRouter(tags=["health"])
 
@@ -39,25 +38,29 @@ async def summary(
     settings: Annotated[TerminalSettings, Depends(get_settings)],
     bot_state: Annotated[BotStateStore, Depends(get_bot_state)],
     candles_provider: Annotated[MarketCandlesProvider, Depends(get_candles_reader)],
-    equity_reader: Annotated[EquityReader, Depends(get_equity_reader)],
-    metrics_reader: Annotated[MetricsReader, Depends(get_metrics_reader)],
+    analysis_reader: Annotated[AnalysisCacheReader, Depends(get_analysis_reader)],
 ) -> TerminalSummaryResponse:
-    candles = candles_provider.load()
-    equity = equity_reader.load()
-    metrics = metrics_reader.load()
+    timeframe = settings.default_timeframe
+    candles = candles_provider.load(timeframe=timeframe, limit=settings.candle_limit)
     bot_status, _, _ = bot_state.snapshot()
 
-    initial = Decimal(equity.initial_capital)
-    current = Decimal(equity.current_capital)
-    capital_change = str(current - initial)
+    verdict = "hold"
+    confidence = 0.0
+    try:
+        analysis = analysis_reader.load_snapshot(timeframe)
+        verdict = analysis.recommendation.verdict
+        confidence = analysis.recommendation.confidence
+    except AnalysisCacheError:
+        pass
 
     return TerminalSummaryResponse(
         data_mode=settings.data_mode,
         symbol=candles.symbol,
         last_price=candles.last_price,
-        account_capital=equity.current_capital,
-        capital_change=capital_change,
-        trade_count=metrics.trade_count,
+        change_pct=candles.change_pct,
+        recommendation_verdict=verdict,
+        recommendation_confidence=confidence,
+        analysis_timeframe=timeframe,
         bot_status=bot_status,
         last_sync=datetime.now(tz=UTC),
     )

@@ -42,16 +42,20 @@ class TerminalSettings(BaseSettings):
     equity_path: Path = Field(default_factory=lambda: _default_samples_dir() / "equity.json")
     trades_path: Path = Field(default_factory=lambda: _default_samples_dir() / "trades.jsonl")
     bot_state_path: Path = Field(
-        default_factory=lambda: _default_ecosystem_dir() / "bot_state.json"
+        default_factory=lambda: _project_root() / "data" / "runtime" / "bot_state.json"
     )
     lakehouse_root: Path = Field(default_factory=lambda: _project_root() / "data" / "lake")
     lakehouse_duckdb: Path | None = Field(default=None)
     ticks_jsonl_path: Path = Field(
         default_factory=lambda: _project_root() / "data" / "live" / "ticks.jsonl"
     )
+    runtime_dir: Path = Field(default_factory=lambda: _project_root() / "data" / "runtime")
+    default_timeframe: str = "1h"
+    supported_timeframes: list[str] = Field(
+        default_factory=lambda: ["1m", "5m", "10m", "15m", "1h"]
+    )
     candle_symbol: str = "BTCUSDT"
-    candle_timeframe: str = "1h"
-    candle_limit: int = 168
+    candle_limit: int = 500
     api_prefix: str = "/api/v1"
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"]
@@ -67,6 +71,8 @@ class TerminalSettings(BaseSettings):
         self.bot_state_path = self.bot_state_path.expanduser().resolve()
         self.lakehouse_root = self.lakehouse_root.expanduser().resolve()
         self.ticks_jsonl_path = self.ticks_jsonl_path.expanduser().resolve()
+        self.runtime_dir = self.runtime_dir.expanduser().resolve()
+        self.runtime_dir.mkdir(parents=True, exist_ok=True)
         if self.lakehouse_duckdb is not None:
             self.lakehouse_duckdb = self.lakehouse_duckdb.expanduser().resolve()
 
@@ -87,35 +93,26 @@ class TerminalSettings(BaseSettings):
         return self
 
     @property
-    def ecosystem_ready(self) -> bool:
-        eco_dir = _default_ecosystem_dir().resolve()
-        try:
-            using_ecosystem = self.metrics_path.resolve().parent == eco_dir
-        except OSError:
-            return False
-        return using_ecosystem and _ecosystem_outputs_present(eco_dir)
+    def analysis_ready(self) -> bool:
+        cache = self.runtime_dir / f"analysis_{self.default_timeframe}.json"
+        return cache.exists() and cache.stat().st_size > 0
 
     @property
     def data_mode(self) -> str:
         from quant_terminal_api.readers.market import lakehouse_is_ready
 
-        if self.ecosystem_ready:
-            return "ecosystem"
+        if lakehouse_is_ready(self.lakehouse_root) and self.analysis_ready:
+            return "live"
         if lakehouse_is_ready(self.lakehouse_root):
             return "live"
         return "demo"
 
     def source_manifest(self) -> dict[str, str]:
-        """Mapa de fuentes activas para /ecosystem/status."""
-        eco_dir = _default_ecosystem_dir().resolve()
-        using_ecosystem = _ecosystem_outputs_present(eco_dir)
         return {
-            "audit": "trade-audit-logger" if using_ecosystem else "samples",
-            "metrics": "quant-metrics-calculator" if using_ecosystem else "samples",
-            "equity": "order-routing-gateway+metrics" if using_ecosystem else "samples",
-            "trades": "order-routing-gateway" if using_ecosystem else "samples",
             "candles": "market-data-lakehouse",
             "ticks": "websocket-feed-handler",
-            "signals": "alpha-signal-generator" if using_ecosystem else "none",
-            "risk": "risk-management-engine" if using_ecosystem else "none",
+            "indicators": "ta-indicators-from-scratch",
+            "signals": "alpha-signal-generator",
+            "analysis": "quant-terminal-web/runtime",
+            "audit": "trade-audit-logger",
         }

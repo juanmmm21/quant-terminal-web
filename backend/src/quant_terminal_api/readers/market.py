@@ -12,22 +12,57 @@ from quant_terminal_api.readers.live_ticks import LiveTicksReader
 class MarketCandlesProvider:
     """Combina velas del lakehouse con el último tick live (websocket-feed-handler → JSONL)."""
 
-    def __init__(self, settings: TerminalSettings) -> None:
+    def __init__(
+        self,
+        settings: TerminalSettings,
+        *,
+        timeframe: str | None = None,
+        limit: int | None = None,
+    ) -> None:
         self._settings = settings
-        self._lakehouse = LakehouseCandlesReader(
-            settings.lakehouse_root,
-            settings.lakehouse_duckdb,
-            symbol=settings.candle_symbol,
-            timeframe=settings.candle_timeframe,
-            limit=settings.candle_limit,
-        )
+        self._timeframe = timeframe or settings.default_timeframe
+        self._limit = limit or settings.candle_limit
         self._live_ticks = LiveTicksReader(settings.ticks_jsonl_path)
 
-    def load(self) -> CandlesResponse:
+    def load(self, *, timeframe: str | None = None, limit: int | None = None) -> CandlesResponse:
+        from quant_terminal_api.readers.candle_aggregate import (
+            aggregate_candles,
+            resolve_lakehouse_timeframe,
+        )
+
+        requested = timeframe or self._timeframe
+        candle_limit = limit or self._limit
+        lake_tf, bucket_minutes = resolve_lakehouse_timeframe(requested)
+        fetch_limit = candle_limit
+        if bucket_minutes is not None:
+            fetch_limit = min(candle_limit * bucket_minutes, 3000)
+
+        reader = LakehouseCandlesReader(
+            self._settings.lakehouse_root,
+            self._settings.lakehouse_duckdb,
+            symbol=self._settings.candle_symbol,
+            timeframe=lake_tf,
+            limit=fetch_limit,
+        )
         try:
-            candles = self._lakehouse.load()
+            candles = reader.load()
         except LakehouseError as exc:
             raise DataSourceError(str(exc)) from exc
+
+        if bucket_minutes is not None:
+            aggregated = aggregate_candles(candles.candles, bucket_minutes=bucket_minutes)
+            if len(aggregated) > candle_limit:
+                aggregated = aggregated[-candle_limit:]
+            last_close = aggregated[-1].close if aggregated else candles.last_price
+            candles = candles.model_copy(
+                update={
+                    "interval": requested,
+                    "candles": aggregated,
+                    "last_price": last_close,
+                }
+            )
+        else:
+            candles = candles.model_copy(update={"interval": requested})
 
         live_price = self._live_ticks.last_price()
         if live_price is not None:

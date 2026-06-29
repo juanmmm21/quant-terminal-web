@@ -7,6 +7,7 @@ from fastapi import Request
 from quant_terminal_api.bot_state import BotStateStore
 from quant_terminal_api.config import TerminalSettings
 from quant_terminal_api.readers import (
+    AnalysisCacheReader,
     AuditReader,
     EquityReader,
     MarketCandlesProvider,
@@ -46,3 +47,8 @@ def get_candles_reader(request: Request) -> MarketCandlesProvider:
 def get_trades_reader(request: Request) -> TradesReader:
     settings: TerminalSettings = request.app.state.settings
     return TradesReader(settings.trades_path)
+
+
+def get_analysis_reader(request: Request) -> AnalysisCacheReader:
+    settings: TerminalSettings = request.app.state.settings
+    return AnalysisCacheReader(settings.runtime_dir, symbol=settings.candle_symbol)

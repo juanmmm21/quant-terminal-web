@@ -25,10 +25,10 @@ class TerminalSummaryResponse(BaseModel):
     symbol: str
     last_price: str
     price_currency: str = "USDT"
-    account_capital: str
-    capital_currency: str = "USDT"
-    capital_change: str
-    trade_count: int
+    change_pct: str = "0"
+    recommendation_verdict: str = "hold"
+    recommendation_confidence: float = 0.0
+    analysis_timeframe: str = "1h"
     bot_status: BotStatus
     last_sync: datetime
 
@@ -136,7 +136,61 @@ class EcosystemStatusResponse(BaseModel):
     ecosystem_ready: bool
     lakehouse_ready: bool
     live_ticks_ready: bool
+    analysis_ready: bool
     paths: dict[str, str]
     modules: dict[str, str]
     manifest: dict[str, Any] | None = None
     last_checked: datetime
+
+
+class RecommendationResponse(BaseModel):
+    verdict: str
+    action: str
+    side: str | None = None
+    confidence: float
+    reason: str
+    strategy_id: str
+    reference_price: str
+    event_time: datetime | None = None
+
+
+class IndicatorSnapshotResponse(BaseModel):
+    rsi: float | None = None
+    macd_line: float | None = None
+    signal_line: float | None = None
+    sma_20: float | None = None
+    ema_20: float | None = None
+
+
+class TrainingStatsResponse(BaseModel):
+    timeframe: str
+    symbol: str
+    bars_analyzed: int
+    signal_count: int
+    enter_signals: int
+    exit_signals: int
+    directional_win_rate: str
+    selected_strategy: str
+    trained_at: datetime
+
+
+class SignalMarkerResponse(BaseModel):
+    event_time: datetime
+    action: str
+    side: str | None = None
+    confidence: float
+    reason: str
+    reference_price: str
+    strategy_id: str
+
+
+class AnalysisSnapshotResponse(BaseModel):
+    symbol: str
+    timeframe: str
+    last_price: str
+    currency: str = "USDT"
+    updated_at: datetime
+    recommendation: RecommendationResponse
+    indicators: IndicatorSnapshotResponse
+    training: TrainingStatsResponse
+    signals: list[SignalMarkerResponse]

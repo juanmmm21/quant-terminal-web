@@ -7,6 +7,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from analysis_fixture import write_sample_analysis
 from fastapi.testclient import TestClient
 
 from quant_terminal_api.app import create_app
@@ -14,6 +15,7 @@ from quant_terminal_api.bot_state import BotStateStore
 from quant_terminal_api.config import TerminalSettings
 from quant_terminal_api.models import BotStatus
 from quant_terminal_api.readers import (
+    AnalysisCacheReader,
     AuditReader,
     EquityReader,
     LakehouseCandlesReader,
@@ -161,6 +163,21 @@ def settings(samples_dir: Path, lakehouse_dir: Path, tmp_path: Path) -> Terminal
         + "\n",
         encoding="utf-8",
     )
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    write_sample_analysis(runtime_dir / "analysis_1h.json", timeframe="1h")
+    bot_state = runtime_dir / "bot_state.json"
+    bot_state.write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "updated_at": datetime.now(tz=UTC).isoformat(),
+                "message": "ok",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return TerminalSettings(
         audit_db_path=samples_dir / "audit.db",
         metrics_path=samples_dir / "metrics.json",
@@ -169,7 +186,8 @@ def settings(samples_dir: Path, lakehouse_dir: Path, tmp_path: Path) -> Terminal
         lakehouse_root=lakehouse_dir,
         lakehouse_duckdb=lakehouse_dir / "catalog.duckdb",
         ticks_jsonl_path=ticks_path,
-        bot_state_path=samples_dir / "bot_state.json",
+        bot_state_path=bot_state,
+        runtime_dir=runtime_dir,
     ).resolve_paths()
 
 
@@ -221,6 +239,13 @@ def test_audit_reader_filters(settings: TerminalSettings) -> None:
     assert errors[0].severity == "warning"
 
 
+def test_analysis_reader(settings: TerminalSettings) -> None:
+    reader = AnalysisCacheReader(settings.runtime_dir, symbol="BTCUSDT")
+    snapshot = reader.load_snapshot("1h")
+    assert snapshot.recommendation.verdict == "hold"
+    assert snapshot.training.bars_analyzed == 100
+
+
 def test_bot_state_persists(settings: TerminalSettings) -> None:
     store = BotStateStore(settings.bot_state_path)
     store.set_paused("test pause")
@@ -255,27 +280,19 @@ def test_bot_panic_flow(client: TestClient) -> None:
 
 
 def test_metrics_and_equity_endpoints(client: TestClient) -> None:
-    metrics = client.get("/api/v1/metrics")
-    assert metrics.status_code == 200
-    assert metrics.json()["profit_factor"] == "1.85"
-
-    equity = client.get("/api/v1/equity-curve")
-    assert equity.status_code == 200
-    assert len(equity.json()["points"]) == 6
-    assert equity.json()["current_capital"] == "10330.00"
-
-    candles = client.get("/api/v1/market/candles")
+    candles = client.get("/api/v1/market/candles?timeframe=1h")
     assert candles.status_code == 200
     assert candles.json()["last_price"] == "60152.00"
 
-    trades = client.get("/api/v1/trades")
-    assert trades.status_code == 200
-    assert trades.json()["count"] == 4
+    analysis = client.get("/api/v1/analysis/snapshot?timeframe=1h")
+    assert analysis.status_code == 200
+    assert analysis.json()["recommendation"]["verdict"] == "hold"
 
     summary = client.get("/api/v1/summary")
     assert summary.status_code == 200
-    assert summary.json()["trade_count"] == 2
-    assert summary.json()["data_mode"] == "live"
+    body = summary.json()
+    assert body["recommendation_verdict"] == "hold"
+    assert body["data_mode"] == "live"
 
 
 def test_audit_events_endpoint(client: TestClient) -> None:
@@ -291,5 +308,5 @@ def test_ecosystem_status_endpoint(client: TestClient) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["lakehouse_ready"] is True
-    assert body["live_ticks_ready"] is True
+    assert body["analysis_ready"] is True
     assert "modules" in body

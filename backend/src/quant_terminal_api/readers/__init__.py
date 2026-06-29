@@ -1,3 +1,4 @@
+from quant_terminal_api.readers.analysis import AnalysisCacheError, AnalysisCacheReader
 from quant_terminal_api.readers.data import (
     AuditReader,
     DataSourceError,
@@ -9,6 +10,8 @@ from quant_terminal_api.readers.lakehouse import LakehouseCandlesReader, Lakehou
 from quant_terminal_api.readers.market import MarketCandlesProvider, lakehouse_is_ready
 
 __all__ = [
+    "AnalysisCacheReader",
+    "AnalysisCacheError",
     "AuditReader",
     "DataSourceError",
     "EquityReader",
