@@ -2,7 +2,7 @@
 """
 Daemon de mercado: ticks live → lakehouse → análisis periódico.
 
-Respeta bot_state.json (pause/panic detiene el análisis).
+Ingesta incremental de ticks nuevos y re-analiza tras cada ingesta.
 """
 
 from __future__ import annotations
@@ -37,12 +37,6 @@ def read_bot_status(state_path: Path) -> str:
     return "running"
 
 
-def tick_file_size(path: Path) -> int:
-    if not path.exists():
-        return 0
-    return path.stat().st_size
-
-
 def ingest_ticks(ticks_path: Path, lake_root: Path, *, symbol: str) -> None:
     if not ticks_path.exists() or ticks_path.stat().st_size == 0:
         return
@@ -69,23 +63,47 @@ def ingest_ticks(ticks_path: Path, lake_root: Path, *, symbol: str) -> None:
     )
 
 
-def start_tick_bridge(symbol: str, output: Path) -> subprocess.Popen[str]:
-  cmd = [sys.executable, str(_SCRIPTS_DIR / "tick_bridge.py"), "--symbol", symbol, "--output", str(output)]
-  logger.info("starting tick bridge: %s", " ".join(cmd))
-  return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+def write_tick_delta(source: Path, staging: Path, *, line_offset: int) -> int:
+    """Escribe ticks nuevos desde line_offset. Devuelve el nuevo offset."""
+    if not source.exists():
+        return line_offset
+    lines = source.read_text(encoding="utf-8").splitlines()
+    if len(lines) <= line_offset:
+        return line_offset
+    staging.parent.mkdir(parents=True, exist_ok=True)
+    staging.write_text("\n".join(lines[line_offset:]) + "\n", encoding="utf-8")
+    return len(lines)
+
+
+def start_tick_bridge(symbol: str, output: Path) -> subprocess.Popen[bytes]:
+    cmd = [
+        sys.executable,
+        str(_SCRIPTS_DIR / "tick_bridge.py"),
+        "--symbol",
+        symbol,
+        "--output",
+        str(output),
+    ]
+    logger.info("starting tick bridge: %s", " ".join(cmd))
+    return subprocess.Popen(cmd)
+
+
+def run_analysis_cycle(symbol: str) -> None:
+    run_all_timeframes(symbol=symbol)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Market data + analysis daemon")
     parser.add_argument("--symbol", default="BTCUSDT")
-    parser.add_argument("--ingest-interval", type=int, default=45)
-    parser.add_argument("--analysis-interval", type=int, default=90)
+    parser.add_argument("--ingest-interval", type=int, default=10)
+    parser.add_argument("--analysis-interval", type=int, default=45)
     parser.add_argument("--no-tick-bridge", action="store_true")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     root = project_root()
     ticks_path = root / "data" / "live" / "ticks.jsonl"
+    tick_delta_path = root / "data" / "runtime" / "ticks_delta.jsonl"
     lake_root = root / "data" / "lake"
     state_path = root / "data" / "runtime" / "bot_state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -96,45 +114,61 @@ def main() -> None:
             encoding="utf-8",
         )
 
-    bridge_proc: subprocess.Popen[str] | None = None
+    symbol = args.symbol.upper()
+    bridge_proc: subprocess.Popen[bytes] | None = None
     if not args.no_tick_bridge:
-        bridge_proc = start_tick_bridge(args.symbol.upper(), ticks_path)
+        bridge_proc = start_tick_bridge(symbol, ticks_path)
 
-    last_tick_size = tick_file_size(ticks_path)
+    tick_line_offset = 0
+    if ticks_path.exists():
+        tick_line_offset = len(ticks_path.read_text(encoding="utf-8").splitlines())
+
     last_ingest = 0.0
     last_analysis = 0.0
 
     try:
+        logger.info("initial analysis cycle")
+        run_analysis_cycle(symbol)
+        last_analysis = time.time()
+
         while True:
             now = time.time()
             status = read_bot_status(state_path)
-            current_tick_size = tick_file_size(ticks_path)
 
             if status == "panic":
                 logger.warning("bot panic — analysis halted")
             elif status == "paused":
-                logger.info("bot paused — skipping analysis cycle")
+                logger.debug("bot paused — skipping cycle")
             else:
-                if current_tick_size != last_tick_size and now - last_ingest >= args.ingest_interval:
-                    try:
-                        ingest_ticks(ticks_path, lake_root, symbol=args.symbol.upper())
-                        last_tick_size = current_tick_size
-                        last_ingest = now
-                    except Exception as exc:
-                        logger.error("lakehouse ingest failed: %s", exc)
+                ingested = False
+                if now - last_ingest >= args.ingest_interval:
+                    new_offset = write_tick_delta(
+                        ticks_path,
+                        tick_delta_path,
+                        line_offset=tick_line_offset,
+                    )
+                    if new_offset > tick_line_offset:
+                        try:
+                            ingest_ticks(tick_delta_path, lake_root, symbol=symbol)
+                            tick_line_offset = new_offset
+                            last_ingest = now
+                            ingested = True
+                            logger.info("ingested live ticks (offset=%s)", tick_line_offset)
+                        except Exception as exc:
+                            logger.error("lakehouse ingest failed: %s", exc)
 
-                if now - last_analysis >= args.analysis_interval:
+                if ingested or now - last_analysis >= args.analysis_interval:
                     try:
-                        run_all_timeframes(symbol=args.symbol.upper())
+                        run_analysis_cycle(symbol)
                         last_analysis = now
                     except Exception as exc:
                         logger.error("analysis cycle failed: %s", exc)
 
             if bridge_proc is not None and bridge_proc.poll() is not None:
                 logger.error("tick bridge exited — restarting")
-                bridge_proc = start_tick_bridge(args.symbol.upper(), ticks_path)
+                bridge_proc = start_tick_bridge(symbol, ticks_path)
 
-            time.sleep(5)
+            time.sleep(2)
     except KeyboardInterrupt:
         logger.info("daemon stopping")
     finally:

@@ -62,6 +62,32 @@ def run_cli(command: list[str], *, check: bool = True) -> subprocess.CompletedPr
     return proc
 
 
+def count_lakehouse_candles(lake_root: Path, *, symbol: str, timeframe: str) -> int:
+    """Cuenta velas disponibles en el lakehouse para un símbolo/timeframe."""
+    if not lake_root.exists():
+        return 0
+    parquet_files = [str(path) for path in lake_root.rglob("candles.parquet")]
+    if not parquet_files:
+        return 0
+
+    import duckdb
+
+    paths_sql = ", ".join("'" + path.replace("'", "''") + "'" for path in parquet_files)
+    connection = duckdb.connect()
+    try:
+        row = connection.execute(
+            f"""
+            SELECT COUNT(*) AS n
+            FROM read_parquet([{paths_sql}], union_by_name=true)
+            WHERE symbol = ? AND timeframe = ?
+            """,
+            [symbol, timeframe],
+        ).fetchone()
+    finally:
+        connection.close()
+    return int(row[0]) if row else 0
+
+
 def resolve_ticks_source() -> Path:
     candidates = [
         project_root() / "data" / "live" / "ticks.jsonl",

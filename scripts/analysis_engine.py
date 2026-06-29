@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -22,6 +23,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from ecosystem_tools import (
+    count_lakehouse_candles,
     export_lakehouse_candles_jsonl,
     indicators_json_to_candles_jsonl,
     project_root,
@@ -34,6 +36,7 @@ logger = logging.getLogger(__name__)
 STRATEGIES = ("rsi_mean_reversion", "macd_crossover")
 SUPPORTED_UI_TIMEFRAMES = ("1m", "5m", "10m", "15m", "1h")
 LAKEHOUSE_TIMEFRAMES = ("1m", "5m", "1h")
+DEFAULT_ANALYSIS_BAR_LIMIT = int(os.environ.get("TERMINAL_ANALYSIS_CANDLE_LIMIT", "0"))
 
 
 def runtime_dir() -> Path:
@@ -256,11 +259,22 @@ def read_last_price(ticks_path: Path, fallback: str) -> str:
     return fallback
 
 
+def _export_limit(lake_root: Path, symbol: str, ui_timeframe: str, candle_limit: int) -> int:
+    lake_tf = lakehouse_timeframe_for(ui_timeframe)
+    source_tf = "1m" if ui_timeframe in ("10m", "15m") else lake_tf
+    available = count_lakehouse_candles(lake_root, symbol=symbol, timeframe=source_tf)
+    if available <= 0:
+        return max(candle_limit, 500)
+    if candle_limit <= 0:
+        return available
+    return min(candle_limit, available)
+
+
 def run_analysis(
     *,
     symbol: str = "BTCUSDT",
     ui_timeframe: str = "1h",
-    candle_limit: int = 500,
+    candle_limit: int = DEFAULT_ANALYSIS_BAR_LIMIT,
 ) -> Path:
     if ui_timeframe not in SUPPORTED_UI_TIMEFRAMES:
         raise ValueError(f"unsupported timeframe: {ui_timeframe}")
@@ -272,12 +286,14 @@ def run_analysis(
     lake_tf = lakehouse_timeframe_for(ui_timeframe)
 
     candles_jsonl = work / f"candles_{ui_timeframe}.jsonl"
+    export_limit = _export_limit(lake_root, symbol, ui_timeframe, candle_limit)
+    logger.info("exporting %s bars for %s (%s)", export_limit, ui_timeframe, lake_tf)
     export_lakehouse_candles_jsonl(
         lake_root,
         candles_jsonl,
         symbol=symbol,
         timeframe=lake_tf,
-        limit=candle_limit if lake_tf == ui_timeframe else min(candle_limit * 15, 3000),
+        limit=export_limit,
     )
     bar_count = sum(1 for line in candles_jsonl.read_text(encoding="utf-8").splitlines() if line.strip())
 
@@ -349,7 +365,7 @@ def run_analysis(
     return output
 
 
-def run_all_timeframes(*, symbol: str = "BTCUSDT") -> None:
+def run_all_timeframes(*, symbol: str = "BTCUSDT", candle_limit: int = DEFAULT_ANALYSIS_BAR_LIMIT) -> None:
     manifest = {
         "generated_at": datetime.now(tz=UTC).isoformat(),
         "symbol": symbol,
@@ -362,7 +378,7 @@ def run_all_timeframes(*, symbol: str = "BTCUSDT") -> None:
     }
     for timeframe in SUPPORTED_UI_TIMEFRAMES:
         try:
-            run_analysis(symbol=symbol, ui_timeframe=timeframe)
+            run_analysis(symbol=symbol, ui_timeframe=timeframe, candle_limit=candle_limit)
         except Exception as exc:
             logger.error("analysis failed for %s: %s", timeframe, exc)
     (runtime_dir() / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -372,7 +388,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train on history and emit live recommendation cache")
     parser.add_argument("--symbol", default="BTCUSDT")
     parser.add_argument("--timeframe", default=None, help="UI timeframe or all if omitted")
-    parser.add_argument("--limit", type=int, default=500)
+    parser.add_argument("--limit", type=int, default=DEFAULT_ANALYSIS_BAR_LIMIT)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
