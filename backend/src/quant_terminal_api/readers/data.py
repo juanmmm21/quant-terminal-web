@@ -9,8 +9,11 @@ from typing import Any
 
 from quant_terminal_api.models import (
     AuditEventResponse,
+    EquityCurveResponse,
     EquityPointResponse,
     PerformanceMetricsResponse,
+    TradeFillResponse,
+    TradesResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -137,7 +140,7 @@ class EquityReader:
     def __init__(self, equity_path: Path) -> None:
         self._equity_path = equity_path
 
-    def load(self) -> tuple[str, list[EquityPointResponse]]:
+    def load(self) -> EquityCurveResponse:
         if not self._equity_path.exists():
             raise DataSourceError(f"equity file not found: {self._equity_path}")
 
@@ -147,9 +150,17 @@ class EquityReader:
             raise DataSourceError(f"failed to read equity file: {exc}") from exc
 
         symbol = "UNKNOWN"
+        currency = "USDT"
+        label = "Capital de la cuenta"
+        initial_capital = "0"
+        current_capital = "0"
         points_raw: list[dict[str, Any]]
         if isinstance(raw, dict):
             symbol = str(raw.get("symbol", symbol))
+            currency = str(raw.get("currency", currency))
+            label = str(raw.get("label", label))
+            initial_capital = str(raw.get("initial_capital", "0"))
+            current_capital = str(raw.get("current_capital", "0"))
             curve = raw.get("equity_curve", raw.get("points", []))
             if not isinstance(curve, list):
                 raise DataSourceError("equity_curve must be a list")
@@ -174,4 +185,70 @@ class EquityReader:
                 )
             )
         points.sort(key=lambda point: point.event_time)
-        return symbol, points
+        if initial_capital == "0" and points:
+            initial_capital = points[0].equity
+        if current_capital == "0" and points:
+            current_capital = points[-1].equity
+        return EquityCurveResponse(
+            symbol=symbol,
+            currency=currency,
+            label=label,
+            initial_capital=initial_capital,
+            current_capital=current_capital,
+            points=points,
+        )
+
+
+class TradesReader:
+    """Reads trade fills JSONL compatible with quant-metrics-calculator."""
+
+    def __init__(self, trades_path: Path) -> None:
+        self._trades_path = trades_path
+
+    def load(self) -> TradesResponse:
+        if not self._trades_path.exists():
+            raise DataSourceError(f"trades file not found: {self._trades_path}")
+
+        try:
+            lines = self._trades_path.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            raise DataSourceError(f"failed to read trades file: {exc}") from exc
+
+        trades: list[TradeFillResponse] = []
+        closed_round_trips = 0
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(item, dict):
+                continue
+            filled_at = item.get("filled_at")
+            if not isinstance(filled_at, str):
+                continue
+            pnl_raw = item.get("realized_pnl")
+            realized_pnl = str(pnl_raw) if pnl_raw is not None else None
+            if realized_pnl is not None:
+                closed_round_trips += 1
+            trades.append(
+                TradeFillResponse(
+                    order_id=str(item.get("order_id", "")),
+                    symbol=str(item.get("symbol", "")),
+                    side=str(item.get("side", "")),
+                    quantity=str(item.get("quantity", "0")),
+                    price=str(item.get("price", "0")),
+                    commission=str(item.get("commission", "0")),
+                    filled_at=_utc_from_iso8601(filled_at),
+                    realized_pnl=realized_pnl,
+                    label=str(item.get("label")) if item.get("label") else None,
+                )
+            )
+        trades.sort(key=lambda trade: trade.filled_at, reverse=True)
+        return TradesResponse(
+            trades=trades,
+            count=len(trades),
+            closed_round_trips=closed_round_trips,
+        )
