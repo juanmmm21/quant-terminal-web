@@ -5,9 +5,9 @@ interface BotStatusBadgeProps {
 }
 
 const LABELS: Record<BotStatus, string> = {
-  running: "Running",
-  paused: "Paused",
-  panic: "PANIC",
+  running: "En marcha",
+  paused: "Pausado",
+  panic: "PÁNICO",
 };
 
 export function BotStatusBadge({ status }: BotStatusBadgeProps) {
