@@ -13,18 +13,76 @@ python3 scripts/start_terminal.py
 
 Esto levanta automáticamente:
 
-1. Bootstrap histórico (si falta lakehouse)
-2. Ticks live de Binance → `data/live/ticks.jsonl`
-3. Ingesta al lakehouse (`1m`, `5m`, `1h`)
-4. Motor de análisis (indicadores + señales sobre histórico)
-5. API FastAPI en `http://127.0.0.1:8000`
-6. UI React en `http://localhost:5173`
+1. **Bootstrap histórico** desde Binance (ver sección [Histórico de mercado](#histórico-de-mercado))
+2. Daemon de mercado: ticks live → lakehouse → re-análisis periódico
+3. API FastAPI en `http://127.0.0.1:8000/api/v1/health`
+4. UI React en **http://localhost:5173** (no uses el puerto 8000 para la interfaz)
 
 También: `npm start` (alias al script anterior).
 
 **Requisitos:** Node.js 20+ y Python 3.11+. El script crea `backend/.venv` en el primer arranque e instala dependencias ahí (no usa `pip` del sistema).
 
 **Puerto 8000 ocupado:** si ya hay una API en marcha, el script la reutiliza. Si el puerto está ocupado por otro proceso, prueba `:8001` o libera el puerto con `lsof -i :8000`.
+
+---
+
+## Histórico de mercado
+
+El motor de análisis entrena sobre **todas las velas disponibles** en `data/lake/`. Esas velas vienen de Binance (bootstrap) y se amplían en vivo con los ticks del WebSocket.
+
+### ¿Se descarga solo?
+
+**Sí**, al ejecutar `npm start` o `python3 scripts/start_terminal.py`, **sin pasos manuales**, cuando:
+
+- No existe lakehouse (`data/lake/` sin `candles.parquet`), **o**
+- Hay **menos de 2000 velas de 1h** (histórico insuficiente para entrenar bien).
+
+Por defecto descarga:
+
+| Intervalo | Alcance por defecto | Velas aprox. |
+|-----------|---------------------|--------------|
+| `1h` | **730 días** (~2 años) | ~17 520 |
+| `1m` | **90 días** | ~129 600 |
+
+La descarga es **paginada** (varias peticiones a la API pública de Binance). La primera vez puede tardar **1–3 minutos**.
+
+Tras el bootstrap, el **market daemon** ingesta ticks nuevos cada ~10 s y **re-analiza** el histórico completo más los datos live. La UI refresca velas y recomendación cada **3 s**.
+
+### Descarga manual o forzada
+
+Si ya tienes un lakehouse antiguo con pocas velas (p. ej. ~360) pero el arranque no vuelve a descargar:
+
+```bash
+cd quant-terminal-web
+
+# Forzar re-descarga completa al arrancar el stack
+npm start -- --refresh-history
+
+# O solo bootstrap (sin levantar API/UI)
+python3 scripts/bootstrap_market_data.py --days-1h 730 --days-1m 90
+```
+
+Opciones de `start_terminal.py`:
+
+| Flag | Default | Descripción |
+|------|---------|-------------|
+| `--refresh-history` | off | Re-descarga aunque ya exista lakehouse |
+| `--history-days-1h` | `730` | Días de velas horarias |
+| `--history-days-1m` | `90` | Días de velas de 1 minuto (`0` = omitir) |
+| `--skip-bootstrap` | off | No descarga histórico al arrancar |
+
+Opciones de `bootstrap_market_data.py`:
+
+```bash
+python3 scripts/bootstrap_market_data.py --days-1h 730 --days-1m 90
+python3 scripts/bootstrap_market_data.py --days-1h 365 --days-1m 0   # solo 1h
+```
+
+Variable de entorno para el límite del motor de análisis ( `0` = usar **todas** las velas del lakehouse):
+
+```bash
+export TERMINAL_ANALYSIS_CANDLE_LIMIT=0   # default: sin tope
+```
 
 ---
 
@@ -46,6 +104,7 @@ También: `npm start` (alias al script anterior).
 
 - Librería **lightweight-charts** (zoom, pan, rueda, pinch)
 - Marcos: `1m`, `5m`, `10m`, `15m`, `1h` (`10m`/`15m` agregados desde `1m`)
+- Hasta **10 000 velas** por marco; actualización live cada 3 s (última vela sin redibujar todo)
 - Marcadores de señales históricas en el gráfico
 - Pantalla completa y «Ajustar zoom»
 
@@ -102,31 +161,24 @@ Demuestra:
 
 ---
 
-## Cómo funciona
+## Cómo funciona (flujo principal)
 
-1. **Pipeline ecosistema** (`scripts/run_ecosystem_pipeline.py`): encadena los CLIs de los módulos vecinos y escribe en `data/ecosystem/`:
-   - `market-data-lakehouse` → velas Parquet
-   - `ta-indicators-from-scratch` → RSI/MACD sobre velas
-   - `alpha-signal-generator` → señales (prueba `rsi_mean_reversion`, luego `macd_crossover`)
-   - `risk-management-engine` → validación pre-trade
-   - `order-routing-gateway` → fills en modo **paper**
-   - `quant-metrics-calculator` → Sharpe, drawdown, etc.
-   - `trade-audit-logger` → SQLite de auditoría
-2. **API:** si existe `data/ecosystem/`, usa esos archivos automáticamente; si no, `samples/`.
-3. **Velas:** DuckDB sobre Parquet en `data/lake/`.
-4. **Último precio:** último tick de `data/live/ticks.jsonl`.
-5. **Bot en paper** (`scripts/paper_bot_runner.py`): re-ejecuta el pipeline cuando llegan ticks nuevos; respeta `bot_state.json` (pánico/pausa).
-6. **Frontend:** polling cada 10s con `Promise.allSettled` (un panel caído no tumba todo el dashboard).
+1. **`start_terminal.py`** / `npm start`: bootstrap histórico (si hace falta), API, UI y `market_daemon.py`.
+2. **`market_daemon.py`**: puente WebSocket → `data/live/ticks.jsonl` → ingesta incremental al lakehouse → `analysis_engine.py` en todos los marcos temporales.
+3. **`analysis_engine.py`**: exporta velas del lakehouse, calcula indicadores (`ta-indicators-from-scratch`), genera señales (`alpha-signal-generator`), elige la mejor estrategia y escribe `data/runtime/analysis_{timeframe}.json`.
+4. **API**: lee lakehouse (velas), runtime (análisis) y ticks live (último precio). Auditoría en `data/runtime/audit.db` (vacía hasta eventos reales).
+5. **Frontend**: polling cada 3 s; gráfico y recomendación se actualizan con datos nuevos.
 
-Modos (`data_mode`):
+Modo `data_mode` en `/api/v1/health`:
 
-| Modo | Condición | UI |
-|------|-----------|-----|
-| `demo` | Sin lakehouse ni ecosistema | Banner con instrucciones |
-| `live` | Lakehouse OK, sin `data/ecosystem/` | Velas/precio reales; métricas aún en samples |
-| `ecosystem` | Pipeline ejecutado | Todos los paneles alimentados por módulos reales |
+| Modo | Condición |
+|------|-----------|
+| `live` | Lakehouse con velas + análisis en runtime |
+| `demo` | Sin lakehouse (fallback limitado) |
 
-Consulta `GET /api/v1/ecosystem/status` para ver rutas activas y módulos conectados.
+### Pipeline ecosistema (opcional / legacy)
+
+Scripts como `run_ecosystem_pipeline.py` y `paper_bot_runner.py` siguen en el repo para integración con paper trading y métricas de cuenta, pero **no forman parte del flujo principal** de recomendaciones. Ver sección [Pipeline ecosistema](#pipeline-ecosistema-opcional--legacy) más abajo.
 
 ---
 
@@ -146,15 +198,16 @@ quant-terminal-web/
 │   ├── components/        # CandlestickChart, TradesTable, TopBar, …
 │   └── api/client.ts
 ├── scripts/
-│   ├── bootstrap_market_data.py      # Binance klines → lakehouse ingest
+│   ├── start_terminal.py             # arranque único: bootstrap + daemon + API + UI
+│   ├── bootstrap_market_data.py      # Binance klines paginados → lakehouse
+│   ├── market_daemon.py            # ticks live → lakehouse → análisis
+│   ├── analysis_engine.py          # indicadores + señales → data/runtime/
 │   ├── tick_bridge.py                # WebSocket → ticks.jsonl
-│   ├── run_ecosystem_pipeline.py     # pipeline completo → data/ecosystem/
-│   ├── paper_bot_runner.py           # re-sync al llegar ticks; respeta pánico
-│   ├── ecosystem_tools.py            # utilidades y transformaciones JSON
-│   └── start_stack.sh                # arranque guiado (bootstrap + pipeline + UI)
-├── samples/               # demo estático (fallback)
-├── data/                  # runtime: lake/, live/, ecosystem/ (gitignored)
-└── package.json           # npm run dev desde la raíz
+│   ├── run_ecosystem_pipeline.py     # (opcional) pipeline paper → data/ecosystem/
+│   └── ecosystem_tools.py            # utilidades subprocess / JSON
+├── samples/               # datos demo estáticos (tests; no flujo principal)
+├── data/                  # runtime: lake/, live/, runtime/ (gitignored)
+└── package.json           # npm start → start_terminal.py
 ```
 
 ---
@@ -199,15 +252,17 @@ python3 samples/build_audit_db.py
 
 ### Velas de mercado (lakehouse)
 
+Normalmente **no hace falta** ejecutar esto a mano: `npm start` descarga el histórico si falta o es insuficiente (ver [Histórico de mercado](#histórico-de-mercado)).
+
 ```bash
 # Instalar lakehouse si no está en PATH
 cd ../market-data-lakehouse && python3 -m pip install -e . && cd ../quant-terminal-web
 
-# Materializa Parquet en data/lake/ (subprocess, sin imports cruzados)
-python3 scripts/bootstrap_market_data.py
+# Manual: 2 años en 1h + 90 días en 1m (paginado desde Binance)
+python3 scripts/bootstrap_market_data.py --days-1h 730 --days-1m 90
 ```
 
-### Pipeline ecosistema (métricas, trades y auditoría reales)
+### Pipeline ecosistema (opcional / legacy)
 
 Requiere los CLIs de los módulos vecinos instalados en PATH o en su `.venv` (el script los resuelve automáticamente).
 
@@ -268,13 +323,12 @@ Abre [http://localhost:5173](http://localhost:5173). Vite proxifica `/api` al ba
 | `TERMINAL_LAKEHOUSE_ROOT` | `data/lake` | Raíz Parquet de `market-data-lakehouse` |
 | `TERMINAL_LAKEHOUSE_DUCKDB` | `data/lake/catalog.duckdb` | Catálogo DuckDB |
 | `TERMINAL_TICKS_JSONL_PATH` | `data/live/ticks.jsonl` | Último precio live |
+| `TERMINAL_RUNTIME_DIR` | `data/runtime` | Análisis JSON + `audit.db` |
 | `TERMINAL_CANDLE_SYMBOL` | `BTCUSDT` | Símbolo de velas |
-| `TERMINAL_CANDLE_TIMEFRAME` | `1h` | Timeframe (`1m`, `5m`, `1h`) |
-| `TERMINAL_AUDIT_DB_PATH` | `samples/audit.db` | SQLite de `trade-audit-logger` |
-| `TERMINAL_METRICS_PATH` | `samples/metrics.json` | Salida de `quant-metrics-calculator` |
-| `TERMINAL_EQUITY_PATH` | `samples/equity.json` | Capital de cuenta (USDT, no precio BTC) |
-| `TERMINAL_TRADES_PATH` | `samples/trades.jsonl` | Fills del backtester |
-| `TERMINAL_BOT_STATE_PATH` | `samples/bot_state.json` | Estado del bot |
+| `TERMINAL_CANDLE_LIMIT` | `50000` | Máx. velas servidas por la API |
+| `TERMINAL_ANALYSIS_CANDLE_LIMIT` | `0` (env) | Barras para entrenar (`0` = todas) |
+| `TERMINAL_AUDIT_DB_PATH` | `data/runtime/audit.db` | SQLite de auditoría (sesión live) |
+| `TERMINAL_BOT_STATE_PATH` | `data/runtime/bot_state.json` | Estado del motor (pause/panic) |
 
 ---
 
@@ -355,11 +409,12 @@ npm run build
 | Síntoma | Causa probable | Solución |
 |---------|----------------|----------|
 | `zsh: command not found: pip` | macOS sin `pip` en PATH | Usa `python3 -m pip` o `source .venv/bin/activate` |
-| `npm run dev` ENOENT en raíz | `package.json` solo en `frontend/` | Usa `npm run dev` desde raíz (hay delegación) o `cd frontend` |
+| Pocas velas analizadas (~360) | Lakehouse antiguo / bootstrap corto | `npm start -- --refresh-history` o `bootstrap_market_data.py --days-1h 730` |
+| Bootstrap no arranca solo | Ya hay lakehouse pero con poco histórico | Mismo: `--refresh-history` (umbral: menos de 2000 velas 1h) |
 | `503` en `/market/candles` | Lakehouse vacío | `python3 scripts/bootstrap_market_data.py` |
-| Modo `demo` en UI | Sin `candles.parquet` en `data/lake/` | Ejecuta bootstrap del lakehouse |
-| `409` al resume tras panic | Pánico es terminal hasta reset | Pulsa «Reiniciar bot» o `POST /bot/reset` |
-| Precio no actualiza en live | `tick_bridge.py` no corre | Arranca `python3 scripts/tick_bridge.py` |
+| Página en blanco en `:5173` | API caída o puerto equivocado | Abre **localhost:5173**; comprueba `:8000/api/v1/health` |
+| Gráfico no se actualiza | Daemon parado | Arranca con `npm start` (incluye `market_daemon`) |
+| `409` al resume tras panic | Pánico es terminal hasta reset | Pulsa «Reiniciar» o `POST /bot/reset` |
 
 ---
 
