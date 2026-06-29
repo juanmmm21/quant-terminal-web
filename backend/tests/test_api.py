@@ -284,3 +284,12 @@ def test_audit_events_endpoint(client: TestClient) -> None:
     body = response.json()
     assert body["count"] == 3
     assert len(body["events"]) == 3
+
+
+def test_ecosystem_status_endpoint(client: TestClient) -> None:
+    response = client.get("/api/v1/ecosystem/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["lakehouse_ready"] is True
+    assert body["live_ticks_ready"] is True
+    assert "modules" in body

@@ -129,3 +129,14 @@ class TradesResponse(BaseModel):
     trades: list[TradeFillResponse]
     count: int
     closed_round_trips: int
+
+
+class EcosystemStatusResponse(BaseModel):
+    data_mode: str
+    ecosystem_ready: bool
+    lakehouse_ready: bool
+    live_ticks_ready: bool
+    paths: dict[str, str]
+    modules: dict[str, str]
+    manifest: dict[str, Any] | None = None
+    last_checked: datetime

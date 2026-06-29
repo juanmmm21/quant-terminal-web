@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from quant_terminal_api import __version__
 from quant_terminal_api.bot_state import BotStateStore
 from quant_terminal_api.config import TerminalSettings
-from quant_terminal_api.routes import audit, bot, health, market, metrics, trades
+from quant_terminal_api.routes import audit, bot, ecosystem, health, market, metrics, trades
 
 logger = logging.getLogger(__name__)
 
@@ -54,4 +54,5 @@ def create_app(settings: TerminalSettings | None = None) -> FastAPI:
     app.include_router(market.router, prefix=prefix)
     app.include_router(trades.router, prefix=prefix)
     app.include_router(audit.router, prefix=prefix)
+    app.include_router(ecosystem.router, prefix=prefix)
     return app

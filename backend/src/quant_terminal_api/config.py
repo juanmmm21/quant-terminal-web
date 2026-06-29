@@ -14,6 +14,20 @@ def _default_samples_dir() -> Path:
     return _project_root() / "samples"
 
 
+def _default_ecosystem_dir() -> Path:
+    return _project_root() / "data" / "ecosystem"
+
+
+def _ecosystem_outputs_present(eco_dir: Path) -> bool:
+    required = (
+        eco_dir / "metrics.json",
+        eco_dir / "equity.json",
+        eco_dir / "trades.jsonl",
+        eco_dir / "audit.db",
+    )
+    return all(path.exists() and path.stat().st_size > 0 for path in required)
+
+
 class TerminalSettings(BaseSettings):
     """Runtime configuration for the terminal API."""
 
@@ -27,7 +41,9 @@ class TerminalSettings(BaseSettings):
     metrics_path: Path = Field(default_factory=lambda: _default_samples_dir() / "metrics.json")
     equity_path: Path = Field(default_factory=lambda: _default_samples_dir() / "equity.json")
     trades_path: Path = Field(default_factory=lambda: _default_samples_dir() / "trades.jsonl")
-    bot_state_path: Path = Field(default_factory=lambda: _default_samples_dir() / "bot_state.json")
+    bot_state_path: Path = Field(
+        default_factory=lambda: _default_ecosystem_dir() / "bot_state.json"
+    )
     lakehouse_root: Path = Field(default_factory=lambda: _project_root() / "data" / "lake")
     lakehouse_duckdb: Path | None = Field(default=None)
     ticks_jsonl_path: Path = Field(
@@ -53,10 +69,53 @@ class TerminalSettings(BaseSettings):
         self.ticks_jsonl_path = self.ticks_jsonl_path.expanduser().resolve()
         if self.lakehouse_duckdb is not None:
             self.lakehouse_duckdb = self.lakehouse_duckdb.expanduser().resolve()
+
+        eco_dir = _default_ecosystem_dir().resolve()
+        samples = _default_samples_dir().resolve()
+        if _ecosystem_outputs_present(eco_dir):
+            if self.audit_db_path == (samples / "audit.db").resolve():
+                self.audit_db_path = eco_dir / "audit.db"
+            if self.metrics_path == (samples / "metrics.json").resolve():
+                self.metrics_path = eco_dir / "metrics.json"
+            if self.equity_path == (samples / "equity.json").resolve():
+                self.equity_path = eco_dir / "equity.json"
+            if self.trades_path == (samples / "trades.jsonl").resolve():
+                self.trades_path = eco_dir / "trades.jsonl"
+            default_bot = (_default_ecosystem_dir() / "bot_state.json").resolve()
+            if self.bot_state_path == default_bot:
+                self.bot_state_path = eco_dir / "bot_state.json"
         return self
+
+    @property
+    def ecosystem_ready(self) -> bool:
+        eco_dir = _default_ecosystem_dir().resolve()
+        try:
+            using_ecosystem = self.metrics_path.resolve().parent == eco_dir
+        except OSError:
+            return False
+        return using_ecosystem and _ecosystem_outputs_present(eco_dir)
 
     @property
     def data_mode(self) -> str:
         from quant_terminal_api.readers.market import lakehouse_is_ready
 
-        return "live" if lakehouse_is_ready(self.lakehouse_root) else "demo"
+        if self.ecosystem_ready:
+            return "ecosystem"
+        if lakehouse_is_ready(self.lakehouse_root):
+            return "live"
+        return "demo"
+
+    def source_manifest(self) -> dict[str, str]:
+        """Mapa de fuentes activas para /ecosystem/status."""
+        eco_dir = _default_ecosystem_dir().resolve()
+        using_ecosystem = _ecosystem_outputs_present(eco_dir)
+        return {
+            "audit": "trade-audit-logger" if using_ecosystem else "samples",
+            "metrics": "quant-metrics-calculator" if using_ecosystem else "samples",
+            "equity": "order-routing-gateway+metrics" if using_ecosystem else "samples",
+            "trades": "order-routing-gateway" if using_ecosystem else "samples",
+            "candles": "market-data-lakehouse",
+            "ticks": "websocket-feed-handler",
+            "signals": "alpha-signal-generator" if using_ecosystem else "none",
+            "risk": "risk-management-engine" if using_ecosystem else "none",
+        }
