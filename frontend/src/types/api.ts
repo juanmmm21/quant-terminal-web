@@ -214,3 +214,35 @@ export interface Promotion {
 export interface PromotionResponse {
   promotion: Promotion | null;
 }
+
+export interface EquityPointPublic {
+  at: string;
+  equity: string;
+}
+
+export interface PublicPaperSide {
+  initial_equity: string;
+  final_equity: string;
+  pnl: string;
+  return_pct: number;
+  fills: number;
+  equity_curve: EquityPointPublic[];
+}
+
+export interface PublicPaperComparison {
+  generated_at: string;
+  period_start: string;
+  period_end: string;
+  symbol: string;
+  strategy: string;
+  timeframe: string;
+  venue: string;
+  gate_passed: boolean | null;
+  validation: Record<string, number | string | null>;
+  disclaimer: string;
+  paper: PublicPaperSide;
+  backtest: (PublicPaperSide & { signals_in_period: number; bars: number }) | null;
+  backtest_error?: string;
+  trader_alive: boolean;
+  heartbeat_age_seconds: number | null;
+}

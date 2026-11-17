@@ -1240,3 +1240,34 @@ button:disabled {
   flex: 1 1 140px;
   min-width: 0;
 }
+
+/* Public read-only paper page */
+.public-shell {
+  display: grid;
+  gap: 16px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.public-chart {
+  width: 100%;
+  min-height: 320px;
+}
+
+.public-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.public-table th,
+.public-table td {
+  text-align: right;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.public-table th:first-child {
+  text-align: left;
+}
