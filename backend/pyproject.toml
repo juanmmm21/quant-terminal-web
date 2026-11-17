@@ -41,6 +41,7 @@ dev = [
 
 [project.scripts]
 quant-terminal-api = "quant_terminal_api.__main__:main"
+quant-paper-trader = "quant_terminal_api.paper.runner:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/quant_terminal_api"]

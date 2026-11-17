@@ -75,6 +75,14 @@ class TerminalSettings(BaseSettings):
     promotion_path: Path = Field(
         default_factory=lambda: _project_root() / "data" / "runtime" / "paper_promotion.json"
     )
+    feed_status_path: Path = Field(
+        default_factory=lambda: _project_root() / "data" / "live" / "feed_status.json"
+    )
+    paper_dir: Path = Field(default_factory=lambda: _project_root() / "data" / "paper")
+    paper_initial_cash: str = "10000"
+    paper_quantity: str = "0.001"
+    paper_max_position: str = "0.01"
+    paper_max_order_notional: str = "1000"
     gate_min_deflated_sharpe: float = 0.95
     gate_max_pbo: float = 0.5
     gate_min_oos_sharpe: float = 0.0
@@ -92,6 +100,8 @@ class TerminalSettings(BaseSettings):
         self.runtime_dir = self.runtime_dir.expanduser().resolve()
         self.devices_path = self.devices_path.expanduser().resolve()
         self.promotion_path = self.promotion_path.expanduser().resolve()
+        self.feed_status_path = self.feed_status_path.expanduser().resolve()
+        self.paper_dir = self.paper_dir.expanduser().resolve()
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         if self.lakehouse_duckdb is not None:
             self.lakehouse_duckdb = self.lakehouse_duckdb.expanduser().resolve()
