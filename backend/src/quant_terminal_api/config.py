@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from quant_terminal_api.validation_gate import GatePolicy
 
 
 def _project_root() -> Path:
@@ -64,6 +66,20 @@ class TerminalSettings(BaseSettings):
     )
     host: str = "127.0.0.1"
     port: int = 8000
+    # Control endpoints (kill switch, pause, promotion, devices) need this bearer token.
+    # Only ever set it through the environment; unset = control API disabled.
+    admin_token: SecretStr | None = None
+    devices_path: Path = Field(
+        default_factory=lambda: _project_root() / "data" / "runtime" / "devices.json"
+    )
+    promotion_path: Path = Field(
+        default_factory=lambda: _project_root() / "data" / "runtime" / "paper_promotion.json"
+    )
+    gate_min_deflated_sharpe: float = 0.95
+    gate_max_pbo: float = 0.5
+    gate_min_oos_sharpe: float = 0.0
+    gate_max_report_age_hours: float = 24.0
+    paper_gate_mode: str = Field(default="enforce", pattern="^(enforce|acknowledge)$")
 
     def resolve_paths(self) -> TerminalSettings:
         self.audit_db_path = self.audit_db_path.expanduser().resolve()
@@ -74,6 +90,8 @@ class TerminalSettings(BaseSettings):
         self.lakehouse_root = self.lakehouse_root.expanduser().resolve()
         self.ticks_jsonl_path = self.ticks_jsonl_path.expanduser().resolve()
         self.runtime_dir = self.runtime_dir.expanduser().resolve()
+        self.devices_path = self.devices_path.expanduser().resolve()
+        self.promotion_path = self.promotion_path.expanduser().resolve()
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         if self.lakehouse_duckdb is not None:
             self.lakehouse_duckdb = self.lakehouse_duckdb.expanduser().resolve()
@@ -91,6 +109,15 @@ class TerminalSettings(BaseSettings):
             if self.bot_state_path == default_bot:
                 self.bot_state_path = eco_dir / "bot_state.json"
         return self
+
+    def gate_policy(self) -> GatePolicy:
+        return GatePolicy(
+            min_deflated_sharpe=self.gate_min_deflated_sharpe,
+            max_pbo=self.gate_max_pbo,
+            min_oos_sharpe=self.gate_min_oos_sharpe,
+            max_report_age_hours=self.gate_max_report_age_hours,
+            mode=self.paper_gate_mode,
+        )
 
     @property
     def analysis_ready(self) -> bool:
