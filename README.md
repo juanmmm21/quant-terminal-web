@@ -100,6 +100,57 @@ export TERMINAL_ANALYSIS_CANDLE_LIMIT=0   # default: no cap
 
 ---
 
+## Out-of-sample validation and the paper-trading gate
+
+No strategy reaches paper trading on the strength of a single in-sample backtest. Every time the
+analysis engine picks a strategy for a timeframe, `scripts/strategy_validation.py` (cached for
+`TERMINAL_VALIDATION_MAX_AGE_HOURS`, default 6 h) runs, through the components' CLIs:
+
+1. `event-driven-backtester validate` — **purged k-fold** (5 folds, 1 % embargo) and
+   **walk-forward** (rolling window, 5 test windows). Each fold picks the candidate with the best
+   Sharpe on its training bars and scores it on unseen bars. Bars whose information overlaps the
+   test block (the p90 holding period) are purged.
+2. `quant-metrics-calculator overfit` — **deflated Sharpe ratio** with `n_trials` = every
+   (strategy, timeframe) pair the engine scores (2 × 5 = 10) and **PBO** via CSCV (16 blocks,
+   12,870 combinations).
+
+Candles are stamped at their open but signals use the close, so for validation both the price
+and the signal are moved to the bar close: a signal is filled at the close it was computed from.
+Strategies that never trade are excluded (a flat line would "win" against losing candidates).
+
+The report (`data/runtime/validation_{tf}.json`, `GET /api/v1/validation?timeframe=1h`) is shown
+in the **Validación fuera de muestra** panel. `POST /api/v1/paper/promote` requires the control
+token **and** the `report_id` the operator was shown (409 if the report changed). Gate checks:
+
+| Check | Default | Variable |
+|-------|---------|----------|
+| Deflated Sharpe ≥ | 0.95 | `TERMINAL_GATE_MIN_DEFLATED_SHARPE` |
+| PBO ≤ | 0.5 | `TERMINAL_GATE_MAX_PBO` |
+| Walk-forward and purged k-fold OOS Sharpe > | 0 | `TERMINAL_GATE_MIN_OOS_SHARPE` |
+| Report age ≤ (h) | 24 | `TERMINAL_GATE_MAX_REPORT_AGE_HOURS` |
+
+`TERMINAL_PAPER_GATE_MODE=enforce` (default) refuses a failing strategy with 412;
+`acknowledge` lets it through but flags it `gate_passed: false` everywhere, including the
+public view.
+
+### Measured in this session (2026-11-17)
+
+Binance BTCUSDT spot klines from `data-api.binance.vision`; 0.1 % commission per side, 0.01 BTC
+per trade on 10,000 USDT; fills at the bar close; Linux x86_64 container (4 vCPU Intel Xeon).
+These are **backtest** figures on history, not live or paper results.
+
+| Timeframe | Period | Bars | Selected | Sharpe (ann.) | PSR | DSR | PBO | WF OOS Sharpe | CV OOS Sharpe |
+|-----------|--------|------|----------|---------------|-----|-----|-----|---------------|---------------|
+| 1h | 2024-11-18 → 2026-11-18 | 17,519 | rsi_mean_reversion | −0.78 | 0.134 | 0.0001 | 0.013 | −1.40 | −0.78 |
+| 5m | 2026-08-19 → 2026-11-17 | 25,921 | rsi_mean_reversion | −7.21 | 0.0002 | 0.0000 | 0.000 | −10.37 | −7.21 |
+| 1m (also 10m/15m) | 2026-08-19 → 2026-11-17 | 129,600 | rsi_mean_reversion | −40.5 | 0.0000 | 0.0000 | 0.000 | −40.96 | −40.52 |
+
+Neither strategy passes: the gate blocks promotion in `enforce` mode. PBO is low only because
+with two candidates the less-bad one (RSI) wins both in and out of sample; the out-of-sample
+Sharpe is what fails. 10m/15m are analysed on 1m candles by the engine, so they repeat 1m.
+
+---
+
 ## Interactive chart
 
 - **lightweight-charts** library (zoom, pan, scroll wheel, pinch)
@@ -329,6 +380,9 @@ Open [http://localhost:5173](http://localhost:5173). Vite proxies `/api` to the 
 | `TERMINAL_ANALYSIS_CANDLE_LIMIT` | `0` (env) | Bars to train on (`0` = all) |
 | `TERMINAL_AUDIT_DB_PATH` | `data/runtime/audit.db` | Audit SQLite (live session) |
 | `TERMINAL_BOT_STATE_PATH` | `data/runtime/bot_state.json` | Engine state (pause/panic) |
+| `TERMINAL_ADMIN_TOKEN` | — (control disabled) | Operator bearer token; environment only, never commit it |
+| `TERMINAL_BINANCE_REST_URL` | `https://data-api.binance.vision` | Public market-data REST base used by the bootstrap |
+| `TERMINAL_VALIDATION` | `1` | `0` skips out-of-sample validation in the analysis engine |
 
 ---
 
@@ -339,10 +393,18 @@ Open [http://localhost:5173](http://localhost:5173). Vite proxies `/api` to the 
 | `GET` | `/health` | Healthcheck + `data_mode` (`demo` \| `live`) |
 | `GET` | `/summary` | Top bar: price, capital, trades, bot state |
 | `GET` | `/bot/status` | State (`running` \| `paused` \| `panic`) |
-| `POST` | `/bot/panic` | Emergency stop |
-| `POST` | `/bot/pause` | Pause |
-| `POST` | `/bot/resume` | Resume |
-| `POST` | `/bot/reset` | Exit panic → `running` |
+| `POST` | `/bot/panic` | Emergency stop 🔒 |
+| `POST` | `/bot/pause` | Pause 🔒 |
+| `POST` | `/bot/resume` | Resume 🔒 |
+| `POST` | `/bot/reset` | Exit panic → `running` 🔒 |
+| `GET` | `/validation?timeframe=1h` | DSR, PBO, walk-forward and purged k-fold report + gate |
+| `GET` | `/paper/promotion` | Strategy currently in paper trading |
+| `POST` | `/paper/promote` | Promote the validated strategy (`timeframe`, `report_id`) 🔒 |
+| `POST` | `/paper/demote` | Stop paper trading it 🔒 |
+
+🔒 = `Authorization: Bearer <token>`: `TERMINAL_ADMIN_TOKEN` (operator) or a device token. With
+no `TERMINAL_ADMIN_TOKEN` in the environment these endpoints answer 503 (control disabled). The
+web UI asks for the token once per tab and keeps it in `sessionStorage` only.
 | `GET` | `/metrics` | Sharpe, Sortino, profit factor, drawdown |
 | `GET` | `/equity-curve` | Account capital in USDT |
 | `GET` | `/market/candles` | OHLCV candles from the lakehouse |
