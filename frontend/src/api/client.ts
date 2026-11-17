@@ -6,11 +6,40 @@ import type {
   CandlesData,
   EcosystemStatus,
   HealthResponse,
+  PromotionResponse,
   TerminalSummary,
   Timeframe,
+  ValidationResponse,
 } from "../types/api";
 
 const API_BASE = "/api/v1";
+const TOKEN_KEY = "quant.controlToken";
+
+/** Control token for the kill switch and other controls. Kept for this tab only. */
+export function getControlToken(): string | null {
+  try {
+    return window.sessionStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setControlToken(token: string | null): void {
+  try {
+    if (token) {
+      window.sessionStorage.setItem(TOKEN_KEY, token);
+    } else {
+      window.sessionStorage.removeItem(TOKEN_KEY);
+    }
+  } catch {
+    // storage unavailable: the token simply is not remembered
+  }
+}
+
+function controlHeaders(): Record<string, string> {
+  const token = getControlToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 class ApiError extends Error {
   constructor(
@@ -22,6 +51,11 @@ class ApiError extends Error {
   }
 }
 
+export interface ApiErrorDetail {
+  message?: string;
+  failed_checks?: string[];
+}
+
 async function request<T>(
   path: string,
   init?: RequestInit & { timeoutMs?: number },
@@ -30,17 +64,21 @@ async function request<T>(
   const timeoutMs = init?.timeoutMs ?? 12_000;
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const { timeoutMs: _ignored, headers, ...rest } = init ?? {};
     const response = await fetch(`${API_BASE}${path}`, {
-      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+      ...rest,
+      headers: { "Content-Type": "application/json", ...(headers ?? {}) },
       signal: controller.signal,
-      ...init,
     });
     if (!response.ok) {
       let detail = response.statusText;
       try {
-        const body = (await response.json()) as { detail?: string };
-        if (body.detail) {
-          detail = typeof body.detail === "string" ? body.detail : response.statusText;
+        const body = (await response.json()) as { detail?: string | ApiErrorDetail };
+        if (typeof body.detail === "string") {
+          detail = body.detail;
+        } else if (body.detail?.message) {
+          const failed = body.detail.failed_checks?.join(", ");
+          detail = failed ? `${body.detail.message}: ${failed}` : body.detail.message;
         }
       } catch {
         // keep status text
@@ -65,14 +103,29 @@ export const api = {
   health: () => request<HealthResponse>("/health"),
   summary: () => request<TerminalSummary>("/summary"),
   botStatus: () => request<BotStatusResponse>("/bot/status"),
-  pauseBot: () => request<BotActionResponse>("/bot/pause", { method: "POST" }),
-  resumeBot: () => request<BotActionResponse>("/bot/resume", { method: "POST" }),
+  pauseBot: () =>
+    request<BotActionResponse>("/bot/pause", { method: "POST", headers: controlHeaders() }),
+  resumeBot: () =>
+    request<BotActionResponse>("/bot/resume", { method: "POST", headers: controlHeaders() }),
   panicBot: (reason: string) =>
     request<BotActionResponse>("/bot/panic", {
       method: "POST",
+      headers: controlHeaders(),
       body: JSON.stringify({ reason }),
     }),
-  resetBot: () => request<BotActionResponse>("/bot/reset", { method: "POST" }),
+  resetBot: () =>
+    request<BotActionResponse>("/bot/reset", { method: "POST", headers: controlHeaders() }),
+  validation: (timeframe: Timeframe) =>
+    request<ValidationResponse>(`/validation?timeframe=${encodeURIComponent(timeframe)}`),
+  promotion: () => request<PromotionResponse>("/paper/promotion"),
+  promote: (timeframe: Timeframe, reportId: string) =>
+    request<PromotionResponse>("/paper/promote", {
+      method: "POST",
+      headers: controlHeaders(),
+      body: JSON.stringify({ timeframe, report_id: reportId }),
+    }),
+  demote: () =>
+    request<PromotionResponse>("/paper/demote", { method: "POST", headers: controlHeaders() }),
   candles: (timeframe: Timeframe, limit = 10_000) =>
     request<CandlesData>(
       `/market/candles?timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`,

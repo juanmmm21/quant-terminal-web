@@ -2,6 +2,7 @@ import type { BotStatus } from "../types/api";
 import { GLOSSARY } from "../utils/glossary";
 import { formatDateTime, formatRelative } from "../utils/format";
 import { BotStatusBadge } from "./BotStatusBadge";
+import { ControlTokenField } from "./ControlTokenField";
 import { HelpTip } from "./HelpTip";
 
 interface BotControlsProps {
@@ -46,6 +47,8 @@ export function BotControls({
       ) : null}
 
       {statusMessage ? <p className="status-message">{statusMessage}</p> : null}
+
+      <ControlTokenField />
 
       <div className="control-buttons">
         <button
