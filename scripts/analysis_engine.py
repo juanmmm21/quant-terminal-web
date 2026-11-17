@@ -25,6 +25,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 from ecosystem_tools import (
     count_lakehouse_candles,
     export_lakehouse_candles_jsonl,
+    indicator_series,
     indicators_json_to_candles_jsonl,
     project_root,
     resolve_cli,
@@ -37,6 +38,9 @@ STRATEGIES = ("rsi_mean_reversion", "macd_crossover")
 SUPPORTED_UI_TIMEFRAMES = ("1m", "5m", "10m", "15m", "1h")
 LAKEHOUSE_TIMEFRAMES = ("1m", "5m", "1h")
 DEFAULT_ANALYSIS_BAR_LIMIT = int(os.environ.get("TERMINAL_ANALYSIS_CANDLE_LIMIT", "0"))
+# Every (strategy, timeframe) pair the engine scores is a trial for the deflated Sharpe ratio.
+N_TRIALS = len(STRATEGIES) * len(SUPPORTED_UI_TIMEFRAMES)
+VALIDATION_ENABLED = os.environ.get("TERMINAL_VALIDATION", "1") != "0"
 
 
 def runtime_dir() -> Path:
@@ -90,13 +94,14 @@ def pick_best_strategy(
     *,
     symbol: str,
     work: Path,
+    suffix: str = "",
 ) -> tuple[str, list[dict[str, Any]]]:
     best_strategy = STRATEGIES[0]
     best_signals: list[dict[str, Any]] = []
     best_score = -1.0
 
     for strategy in STRATEGIES:
-        signals_path = work / f"signals_{strategy}.json"
+        signals_path = work / f"signals_{strategy}{suffix}.json"
         signals = run_signals(
             enriched_candles,
             symbol=symbol,
@@ -160,11 +165,11 @@ def extract_last_indicators(indicators_json: Path, candles_jsonl: Path) -> dict[
     payload = json.loads(indicators_json.read_text(encoding="utf-8"))
     indicators = payload.get("indicators", {}) if isinstance(payload, dict) else {}
     result: dict[str, float | None] = {
-        "rsi": _last_value(indicators.get("rsi", {}).get("values", [])),
+        "rsi": _last_value(indicator_series(indicators, "rsi")),
         "macd_line": _last_value(indicators.get("macd", {}).get("macd_line", [])),
         "signal_line": _last_value(indicators.get("macd", {}).get("signal_line", [])),
-        "sma_20": _last_value(indicators.get("sma", {}).get("values", [])),
-        "ema_20": _last_value(indicators.get("ema", {}).get("values", [])),
+        "sma_20": _last_value(indicator_series(indicators, "sma")),
+        "ema_20": _last_value(indicator_series(indicators, "ema")),
     }
     if result["rsi"] is None:
         lines = [line for line in candles_jsonl.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -281,6 +286,7 @@ def run_analysis(
     symbol: str = "BTCUSDT",
     ui_timeframe: str = "1h",
     candle_limit: int = DEFAULT_ANALYSIS_BAR_LIMIT,
+    force_validation: bool = False,
 ) -> Path:
     if ui_timeframe not in SUPPORTED_UI_TIMEFRAMES:
         raise ValueError(f"unsupported timeframe: {ui_timeframe}")
@@ -325,7 +331,18 @@ def run_analysis(
         event_times_source=candles_jsonl,
     )
 
-    strategy, signals = pick_best_strategy(enriched, symbol=symbol, work=work)
+    strategy, signals = pick_best_strategy(
+        enriched, symbol=symbol, work=work, suffix=f"_{ui_timeframe}"
+    )
+    validation = refresh_validation(
+        symbol=symbol,
+        ui_timeframe=ui_timeframe,
+        lake_timeframe=lake_tf,
+        candles_jsonl=candles_jsonl,
+        strategy=strategy,
+        work=work,
+        force=force_validation,
+    )
     indicators = extract_last_indicators(indicators_json, enriched)
     last_candle = json.loads(
         [line for line in candles_jsonl.read_text(encoding="utf-8").splitlines() if line.strip()][-1]
@@ -363,12 +380,62 @@ def run_analysis(
             "trained_at": now,
         },
         "signals": select_recent_signals(signals, limit=120),
+        "validation": validation,
     }
 
     output = runtime_dir() / f"analysis_{ui_timeframe}.json"
     output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     logger.info("wrote analysis %s (%s signals, verdict=%s)", output, len(signals), recommendation["verdict"])
     return output
+
+
+def refresh_validation(
+    *,
+    symbol: str,
+    ui_timeframe: str,
+    lake_timeframe: str,
+    candles_jsonl: Path,
+    strategy: str,
+    work: Path,
+    force: bool = False,
+) -> dict[str, Any] | None:
+    """Re-run out-of-sample validation when the cached report is stale; return a summary."""
+    from strategy_validation import TIMEFRAME_SECONDS, is_fresh, write_report
+    from strategy_validation import run_validation as run_oos_validation
+
+    path = runtime_dir() / f"validation_{ui_timeframe}.json"
+    if not VALIDATION_ENABLED:
+        return None
+    if force or not is_fresh(path, strategy=strategy):
+        try:
+            report = run_oos_validation(
+                symbol=symbol,
+                timeframe=ui_timeframe,
+                bar_seconds=TIMEFRAME_SECONDS[lake_timeframe],
+                candles_jsonl=candles_jsonl,
+                signal_files={
+                    name: work / f"signals_{name}_{ui_timeframe}.json" for name in STRATEGIES
+                },
+                selected=strategy,
+                n_trials=N_TRIALS,
+                work=work / "validation",
+            )
+            write_report(runtime_dir(), report)
+        except Exception as exc:
+            logger.error("validation failed for %s: %s", ui_timeframe, exc)
+            return {"status": "error", "error": str(exc)}
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return {
+        "status": "ready",
+        "report_id": report.get("report_id"),
+        "strategy": report.get("strategy"),
+        "deflated_sharpe_ratio": report.get("deflated_sharpe_ratio"),
+        "pbo": report.get("pbo"),
+        "generated_at": report.get("generated_at"),
+    }
 
 
 def run_all_timeframes(*, symbol: str = "BTCUSDT", candle_limit: int = DEFAULT_ANALYSIS_BAR_LIMIT) -> None:
