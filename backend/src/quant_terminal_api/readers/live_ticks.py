@@ -17,7 +17,12 @@ class LiveTicksReader:
         if not self._ticks_path.exists():
             return None
         try:
-            lines = self._ticks_path.read_text(encoding="utf-8").splitlines()
+            # Only the tail: the live file grows all day and is read on every request.
+            with self._ticks_path.open("rb") as handle:
+                handle.seek(0, 2)
+                size = handle.tell()
+                handle.seek(max(0, size - 16_384))
+                lines = handle.read().decode("utf-8", errors="replace").splitlines()
         except OSError as exc:
             logger.warning("could not read ticks file %s: %s", self._ticks_path, exc)
             return None
