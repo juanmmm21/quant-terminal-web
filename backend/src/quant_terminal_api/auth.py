@@ -122,6 +122,13 @@ class DeviceRegistry:
             devices[device_id]["apns_environment"] = environment
             self._write(devices)
 
+    def clear_push_token(self, device_id: str) -> None:
+        with self._lock:
+            devices = self._read()
+            if device_id in devices:
+                devices[device_id]["apns_token"] = None
+                self._write(devices)
+
     def list_public(self) -> list[dict[str, Any]]:
         return [self.public(record) for record in self._read().values()]
 
