@@ -232,6 +232,34 @@ answers HTTP 451 from restricted locations, testnet included; deploy from an eli
 
 ---
 
+## Limit-order fills with and without queue position
+
+`scripts/l2_fill_study.py` runs real L2 data through the whole chain, via the CLIs: recording →
+`market-data-lakehouse ingest-depth/export-depth` → `order-book-reconstructor replay` (sequence
+checks, resync, verification against REST snapshots) → passive limit orders →
+`market-condition-simulator queue-fill --model queue|touch` → `event-driven-backtester run
+--executions`. Output: `data/runtime/l2_fill_study.json`.
+
+```bash
+python3 scripts/l2_fill_study.py --recording stream.jsonl snapshots.jsonl
+```
+
+**Measured** on 90 minutes of real BTCUSDT data (`data-stream.binance.vision`, 2026-11-17 23:19 → 2026-11-18 00:49 UTC: 53,975 depth diffs at 100 ms, 170,672 trades, 18 REST snapshots of 5,000 levels; 4-vCPU Linux x86_64, Python 3.12.3; whole pipeline 2 min 15 s). Simulations on recorded data, not live or paper results.
+
+- **Book reconstruction**: 53,581 diffs applied, 394 stale (before the first snapshot), **0 gaps, 0 resyncs** (no message was lost in 90 min); verified against 17 REST snapshots: **6,800/6,800 levels matched**.
+- **Systematic probe** (358 passive orders at the touch, 0.001 BTC, 60 s time in force, 50 ms latency):
+
+| Model | Fill rate | Median time to first fill | Expired unfilled | Markout 1 s | 10 s | 60 s |
+|---|---|---|---|---|---|---|
+| naive `touch` | 91.6 % | 0.71 s | 30 | −0.24 bps | −0.35 bps | −0.59 bps |
+| **queue position** | **79.3 %** | **3.91 s** | 72 | −0.71 bps | −1.12 bps | **−1.58 bps** |
+
+  Fills that need the queue ahead to trade first come later and are the ones the market moves against: the naive model overstates fills by 12 points and understates adverse selection about 2.7× at 60 s.
+- **Strategy orders** (the strategies' 1m signals over the window): only 5 limit orders (MACD; RSI emitted none), so these numbers are anecdotal: fills 2/5 with the queue model vs 4/5 with `touch`; P&L of the 0.001 BTC strategy −0.29 USDT (queue) vs −0.48 (touch) vs −0.54 with the old immediate market fills.
+
+
+---
+
 ## Tick-to-decision latency (Rust accelerators)
 
 `scripts/latency_bench.py` replays recorded Binance depth diffs as raw messages through three
