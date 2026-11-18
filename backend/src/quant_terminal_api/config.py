@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from quant_terminal_api.validation_gate import GatePolicy
@@ -88,11 +88,22 @@ class TerminalSettings(BaseSettings):
     paper_quantity: str = "0.001"
     paper_max_position: str = "0.01"
     paper_max_order_notional: str = "1000"
+    apns_key_path: Path | None = None
+    apns_key_id: str | None = None
+    apns_team_id: str | None = None
+    apns_topic: str | None = None
     gate_min_deflated_sharpe: float = 0.95
     gate_max_pbo: float = 0.5
     gate_min_oos_sharpe: float = 0.0
     gate_max_report_age_hours: float = 24.0
     paper_gate_mode: str = Field(default="enforce", pattern="^(enforce|acknowledge)$")
+
+    @field_validator("apns_key_path", "apns_key_id", "apns_team_id", "apns_topic", "admin_token",
+                     mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        """``KEY=`` in an .env file means "not configured", not an empty path or token."""
+        return None if isinstance(value, str) and not value.strip() else value
 
     def resolve_paths(self) -> TerminalSettings:
         self.audit_db_path = self.audit_db_path.expanduser().resolve()

@@ -28,6 +28,8 @@ dependencies = [
     "duckdb>=1.0,<2",
     "pytz>=2024.1",
     "websockets>=12.0",
+    "httpx[http2]>=0.27",
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +44,7 @@ dev = [
 [project.scripts]
 quant-terminal-api = "quant_terminal_api.__main__:main"
 quant-paper-trader = "quant_terminal_api.paper.runner:main"
+quant-alerts = "quant_terminal_api.alerts.dispatcher:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/quant_terminal_api"]
