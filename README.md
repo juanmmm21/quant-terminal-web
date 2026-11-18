@@ -222,7 +222,7 @@ measured table above); `acknowledge` lets you paper-trade it anyway, flagged as 
 Public page: `http://<server>:8080/public` (put TLS in front of it if you publish it). Binance
 answers HTTP 451 from restricted locations, testnet included; deploy from an eligible location.
 
-| Variable | Default | |
+| Variable | Default | Meaning |
 |----------|---------|-|
 | `TERMINAL_PAPER_VENUE` | `testnet` | `simulated` = fills at the live market price, no exchange (dry run) |
 | `TERMINAL_PAPER_QUANTITY` | `0.001` | BTC per position |
