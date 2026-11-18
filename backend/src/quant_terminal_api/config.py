@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic import Field, SecretStr
@@ -9,6 +10,10 @@ from quant_terminal_api.validation_gate import GatePolicy
 
 
 def _project_root() -> Path:
+    """Repository root; TERMINAL_PROJECT_ROOT wins (needed when the package is installed)."""
+    override = os.environ.get("TERMINAL_PROJECT_ROOT")
+    if override:
+        return Path(override)
     return Path(__file__).resolve().parents[3]
 
 
