@@ -15,10 +15,12 @@ from quant_terminal_api.routes import (
     analysis,
     audit,
     bot,
+    devices,
     ecosystem,
     health,
     market,
     metrics,
+    mobile,
     paper,
     public,
     trades,
@@ -77,4 +79,6 @@ def create_app(settings: TerminalSettings | None = None) -> FastAPI:
     app.include_router(validation.router, prefix=prefix)
     app.include_router(paper.router, prefix=prefix)
     app.include_router(public.router, prefix=prefix)
+    app.include_router(devices.router, prefix=prefix)
+    app.include_router(mobile.router, prefix=prefix)
     return app
