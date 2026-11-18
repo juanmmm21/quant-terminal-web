@@ -250,7 +250,23 @@ def main() -> None:
         default=730,
         help="días de histórico en velas de 1 hora (0 = omitir)",
     )
+    parser.add_argument(
+        "--if-missing",
+        action="store_true",
+        help="no hacer nada si el lakehouse ya tiene al menos --min-1h-bars velas de 1h",
+    )
+    parser.add_argument("--min-1h-bars", type=int, default=2000)
     args = parser.parse_args()
+    if args.if_missing:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from ecosystem_tools import count_lakehouse_candles
+
+        existing = count_lakehouse_candles(
+            project_root() / "data" / "lake", symbol=args.symbol.upper(), timeframe="1h"
+        )
+        if existing >= args.min_1h_bars:
+            print(f"lakehouse already has {existing} 1h candles; skipping bootstrap")
+            return
     bootstrap_history(symbol=args.symbol.upper(), days_1m=args.days_1m, days_1h=args.days_1h)
 
 

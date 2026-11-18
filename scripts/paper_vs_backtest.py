@@ -58,8 +58,8 @@ def paper_side(paper_dir: Path, start: datetime) -> dict[str, Any]:
     last_equity = Decimal(equity_rows[-1]["equity"]) if equity_rows else initial
     return {
         "initial_equity": str(initial),
-        "final_equity": str(last_equity),
-        "pnl": str(last_equity - initial),
+        "final_equity": format(last_equity, "f"),
+        "pnl": format(last_equity - initial, "f"),
         "return_pct": float((last_equity - initial) / initial),
         "fills": len(fills),
         "commission_paid": str(sum((Decimal(f["commission"]) for f in fills), Decimal("0"))),
@@ -99,8 +99,8 @@ def backtest_side(
     initial = Decimal(initial_cash)
     return {
         "initial_equity": initial_cash,
-        "final_equity": str(final),
-        "pnl": str(final - initial),
+        "final_equity": format(final, "f"),
+        "pnl": format(final - initial, "f"),
         "return_pct": float((final - initial) / initial),
         "fills": result["fill_count"],
         "signals_in_period": len(signals),
@@ -146,8 +146,8 @@ def build_comparison(root: Path, *, now: datetime | None = None) -> dict[str, An
             quantity=os.environ.get("TERMINAL_PAPER_QUANTITY", "0.001"),
             initial_cash=state["initial_cash"], work=runtime / "work",
         )
-        report["tracking_error_pnl"] = str(
-            Decimal(report["paper"]["pnl"]) - Decimal(report["backtest"]["pnl"])
+        report["tracking_error_pnl"] = format(
+            Decimal(report["paper"]["pnl"]) - Decimal(report["backtest"]["pnl"]), "f"
         )
     except (FileNotFoundError, ValueError) as exc:
         report["backtest"] = None
