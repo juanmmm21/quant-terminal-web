@@ -96,7 +96,9 @@ export TERMINAL_ANALYSIS_CANDLE_LIMIT=0   # default: no cap
 | Live | `tick_bridge` + lakehouse | Updated price and candles |
 | UI | `quant-terminal-web` | Recommendation + TradingView-like chart |
 
-**There is no capital simulation or paper trading in the main flow.** The UI shows recommendations, indicators, historical signals, and training metrics (directional accuracy on history).
+The terminal shows recommendations, indicators, historical signals and training metrics. Paper
+trading on the Binance **testnet** is a separate, gated process (see
+[24/7 paper trading](#247-paper-trading-on-the-binance-testnet)).
 
 ---
 
@@ -148,6 +150,75 @@ These are **backtest** figures on history, not live or paper results.
 Neither strategy passes: the gate blocks promotion in `enforce` mode. PBO is low only because
 with two candidates the less-bad one (RSI) wins both in and out of sample; the out-of-sample
 Sharpe is what fails. 10m/15m are analysed on 1m candles by the engine, so they repeat 1m.
+
+---
+
+## 24/7 paper trading on the Binance testnet
+
+**Only test funds.** `quant-paper-trader` routes through `order-routing-gateway --mode testnet`;
+real-money routing is locked inside the gateway and nothing in this repository unlocks it.
+
+### What runs (`docker compose`)
+
+| Service | Role | Restart / health |
+|---------|------|------------------|
+| `bootstrap` | downloads history once (`--if-missing`) | one-shot |
+| `feed` | `websocket-feed-handler` → `data/live/ticks.jsonl` (rotated at 100 MB) + `feed_status.json` (stale detection: 15 s silence or 5 s exchange lag) | `unless-stopped`; unhealthy if the status file is old or stale |
+| `daemon` | live ticks → lakehouse → analysis + out-of-sample validation | `unless-stopped` |
+| `api` | FastAPI, **bound to 127.0.0.1:8000** (operator only: SSH tunnel or VPN) | `unless-stopped`; `/health` |
+| `paper-trader` | one step every 10 s (below) | `unless-stopped`; unhealthy if `heartbeat.json` is older than 2 min |
+| `comparison` | `scripts/paper_vs_backtest.py` every 15 min → `data/paper/comparison.json` | loop |
+| `public` | nginx: `/public` page and `GET /api/v1/public/*` only, port 8080 | `unless-stopped` |
+
+Every Python service uses the same image; state lives in the `quant-data` volume, so restarts and
+upgrades keep the journal, the lakehouse and the promotion.
+
+### What the trader does every step
+
+1. **Emergency stop** (`POST /api/v1/bot/panic`, authenticated): cancel every open order at the
+   venue; if the exchange is unreachable, keep retrying every step and never send a new order.
+   The stop itself is a file write in the API, so it works with the exchange down.
+2. **Reconcile** orders whose outcome is unknown (timeout, disconnect, process crash between
+   sending and recording): the intent is written to `data/paper/state.json` *before* it is sent,
+   and afterwards the trader asks the exchange by `clientOrderId` — a fill is booked exactly
+   once, an order the exchange never saw is forgotten. Nothing new is sent meanwhile.
+3. **Hold** when paused, when no strategy is promoted (the out-of-sample gate), or when market
+   data is stale (feed status, status-file age or last-tick age).
+4. **Target** from the promoted strategy's latest recommendation (`buy` → long
+   `TERMINAL_PAPER_QUANTITY`, `sell` → flat); then hard caps and `risk-management-engine check`
+   (fails closed if the engine is unavailable).
+
+`backend/tests/test_chaos.py` drives these paths with a simulated exchange: disconnection at
+submit, reply lost after the exchange accepted the order, process crash mid-order, an order still
+working, stale data, and the emergency stop with the exchange down (plus the authenticated API
+call that triggers it).
+
+### Deploy
+
+```bash
+git clone https://github.com/juanmmm21/quant-terminal-web && cd quant-terminal-web
+cp .env.example .env
+# fill TERMINAL_ADMIN_TOKEN and BINANCE_TESTNET_API_KEY / _SECRET (testnet.binance.vision)
+docker compose up -d --build
+docker compose ps                       # all services healthy after ~1-3 min (bootstrap first)
+ssh -L 8000:127.0.0.1:8000 your-server  # operator UI/API from your machine
+```
+
+Then, from the operator terminal (token in the control field): review the **Validación fuera de
+muestra** panel and promote a strategy. With the default `TERMINAL_PAPER_GATE_MODE=enforce` a
+strategy that fails the gate cannot be promoted (none of the current ones passes, see the
+measured table above); `acknowledge` lets you paper-trade it anyway, flagged as such in public.
+
+Public page: `http://<server>:8080/public` (put TLS in front of it if you publish it). Binance
+answers HTTP 451 from restricted locations, testnet included; deploy from an eligible location.
+
+| Variable | Default | |
+|----------|---------|-|
+| `TERMINAL_PAPER_VENUE` | `testnet` | `simulated` = fills at the live market price, no exchange (dry run) |
+| `TERMINAL_PAPER_QUANTITY` | `0.001` | BTC per position |
+| `TERMINAL_PAPER_MAX_POSITION` / `_MAX_ORDER_NOTIONAL` | `0.01` / `1000` | hard caps |
+| `TERMINAL_PAPER_INTERVAL_SECONDS` | `10` | step period |
+| `TERMINAL_PROJECT_ROOT` | repository root | set to `/app` in the image |
 
 ---
 
