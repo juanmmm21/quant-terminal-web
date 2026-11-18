@@ -222,6 +222,41 @@ answers HTTP 451 from restricted locations, testnet included; deploy from an eli
 
 ---
 
+## Tick-to-decision latency (Rust accelerators)
+
+`scripts/latency_bench.py` replays recorded Binance depth diffs as raw messages through three
+paths that end in the same decision (top-5 imbalance and microprice, computed with `Decimal`),
+checks that **every message gets the same decision on every path**, and reports per-message
+latency after a 1,000-message warm-up:
+
+| Path | p50 | p90 | p99 | p99.9 | max |
+|------|-----|-----|-----|-------|-----|
+| v0.1: `json.loads` → Decimal parser → `DepthSynchronizer` → view | 131 µs | 714 µs | 3.70 ms | 7.34 ms | 18.3 ms |
+| fast API, Python fallback | 86 µs | 409 µs | 2.05 ms | 4.00 ms | 7.8 ms |
+| fast API, Rust (`websocket-feed-handler-rs` + `order-book-reconstructor-rs`) | **15.5 µs** | 48 µs | **166 µs** | 321 µs | 0.69 ms |
+
+Data and machine: 25,589 BTCUSDT depth diffs (100 ms stream, ~32 levels each) recorded from
+`data-stream.binance.vision` on 2026-11-17 23:19–00:01 UTC; 4-vCPU Linux x86_64 container,
+Python 3.12.3, release builds. Histograms:
+
+```text
+baseline (v0.1)            fast API, Rust
+  <50µs   2875 ######       <10µs    882 ##
+ <100µs   5726 ###########  <20µs  15824 ########################################
+ <200µs   7076 ##############  <50µs   5582 ##############
+ <500µs   5696 ###########   <100µs   1520 ####
+<1000µs   1854 ####          <200µs    652 ##
+<2000µs   1026 ##            <500µs    124 #
+<5000µs    739 #            <1000µs      5 #
+ >=5 ms     97 #
+```
+
+```bash
+python3 scripts/latency_bench.py --recording stream.jsonl snapshots.jsonl
+```
+
+---
+
 ## Interactive chart
 
 - **lightweight-charts** library (zoom, pan, scroll wheel, pinch)
