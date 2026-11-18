@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from quant_terminal_api.validation_gate import GatePolicy
 
 
 def _project_root() -> Path:
+    """Repository root; TERMINAL_PROJECT_ROOT wins (needed when the package is installed)."""
+    override = os.environ.get("TERMINAL_PROJECT_ROOT")
+    if override:
+        return Path(override)
     return Path(__file__).resolve().parents[3]
 
 
@@ -64,6 +71,39 @@ class TerminalSettings(BaseSettings):
     )
     host: str = "127.0.0.1"
     port: int = 8000
+    # Control endpoints (kill switch, pause, promotion, devices) need this bearer token.
+    # Only ever set it through the environment; unset = control API disabled.
+    admin_token: SecretStr | None = None
+    devices_path: Path = Field(
+        default_factory=lambda: _project_root() / "data" / "runtime" / "devices.json"
+    )
+    promotion_path: Path = Field(
+        default_factory=lambda: _project_root() / "data" / "runtime" / "paper_promotion.json"
+    )
+    feed_status_path: Path = Field(
+        default_factory=lambda: _project_root() / "data" / "live" / "feed_status.json"
+    )
+    paper_dir: Path = Field(default_factory=lambda: _project_root() / "data" / "paper")
+    paper_initial_cash: str = "10000"
+    paper_quantity: str = "0.001"
+    paper_max_position: str = "0.01"
+    paper_max_order_notional: str = "1000"
+    apns_key_path: Path | None = None
+    apns_key_id: str | None = None
+    apns_team_id: str | None = None
+    apns_topic: str | None = None
+    gate_min_deflated_sharpe: float = 0.95
+    gate_max_pbo: float = 0.5
+    gate_min_oos_sharpe: float = 0.0
+    gate_max_report_age_hours: float = 24.0
+    paper_gate_mode: str = Field(default="enforce", pattern="^(enforce|acknowledge)$")
+
+    @field_validator("apns_key_path", "apns_key_id", "apns_team_id", "apns_topic", "admin_token",
+                     mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        """``KEY=`` in an .env file means "not configured", not an empty path or token."""
+        return None if isinstance(value, str) and not value.strip() else value
 
     def resolve_paths(self) -> TerminalSettings:
         self.audit_db_path = self.audit_db_path.expanduser().resolve()
@@ -74,6 +114,10 @@ class TerminalSettings(BaseSettings):
         self.lakehouse_root = self.lakehouse_root.expanduser().resolve()
         self.ticks_jsonl_path = self.ticks_jsonl_path.expanduser().resolve()
         self.runtime_dir = self.runtime_dir.expanduser().resolve()
+        self.devices_path = self.devices_path.expanduser().resolve()
+        self.promotion_path = self.promotion_path.expanduser().resolve()
+        self.feed_status_path = self.feed_status_path.expanduser().resolve()
+        self.paper_dir = self.paper_dir.expanduser().resolve()
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         if self.lakehouse_duckdb is not None:
             self.lakehouse_duckdb = self.lakehouse_duckdb.expanduser().resolve()
@@ -91,6 +135,15 @@ class TerminalSettings(BaseSettings):
             if self.bot_state_path == default_bot:
                 self.bot_state_path = eco_dir / "bot_state.json"
         return self
+
+    def gate_policy(self) -> GatePolicy:
+        return GatePolicy(
+            min_deflated_sharpe=self.gate_min_deflated_sharpe,
+            max_pbo=self.gate_max_pbo,
+            min_oos_sharpe=self.gate_min_oos_sharpe,
+            max_report_age_hours=self.gate_max_report_age_hours,
+            mode=self.paper_gate_mode,
+        )
 
     @property
     def analysis_ready(self) -> bool:

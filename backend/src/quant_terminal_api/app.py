@@ -8,18 +8,25 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from quant_terminal_api import __version__
+from quant_terminal_api.auth import DeviceRegistry
 from quant_terminal_api.bot_state import BotStateStore
 from quant_terminal_api.config import TerminalSettings
 from quant_terminal_api.routes import (
     analysis,
     audit,
     bot,
+    devices,
     ecosystem,
     health,
     market,
     metrics,
+    mobile,
+    paper,
+    public,
     trades,
+    validation,
 )
+from quant_terminal_api.validation_gate import PromotionStore
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +54,17 @@ def create_app(settings: TerminalSettings | None = None) -> FastAPI:
     )
     app.state.settings = resolved
     app.state.bot_state = BotStateStore(resolved.bot_state_path)
+    app.state.devices = DeviceRegistry(resolved.devices_path)
+    app.state.promotions = PromotionStore(resolved.promotion_path)
+    if resolved.admin_token is None:
+        logger.warning("TERMINAL_ADMIN_TOKEN is not set: control endpoints are disabled")
 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=resolved.cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["Authorization", "Content-Type"],
     )
 
     prefix = resolved.api_prefix.rstrip("/")
@@ -65,4 +76,9 @@ def create_app(settings: TerminalSettings | None = None) -> FastAPI:
     app.include_router(trades.router, prefix=prefix)
     app.include_router(audit.router, prefix=prefix)
     app.include_router(ecosystem.router, prefix=prefix)
+    app.include_router(validation.router, prefix=prefix)
+    app.include_router(paper.router, prefix=prefix)
+    app.include_router(public.router, prefix=prefix)
+    app.include_router(devices.router, prefix=prefix)
+    app.include_router(mobile.router, prefix=prefix)
     return app

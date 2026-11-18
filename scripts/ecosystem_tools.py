@@ -103,6 +103,23 @@ def resolve_ticks_source() -> Path:
     )
 
 
+def dedupe_candle_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per open_time (sorted input), keeping the most complete bar (most trades).
+
+    Live ingestion can append a second partial row for a bar the bootstrap already wrote;
+    feeding both to the indicators would double-count that bar.
+    """
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        key = str(row.get("open_time", row.get("close_time", "")))
+        if result and str(result[-1].get("open_time", result[-1].get("close_time", ""))) == key:
+            if int(row.get("trade_count", 0) or 0) >= int(result[-1].get("trade_count", 0) or 0):
+                result[-1] = row
+            continue
+        result.append(row)
+    return result
+
+
 def export_lakehouse_candles_jsonl(
     lake_root: Path,
     output: Path,
@@ -137,6 +154,7 @@ def export_lakehouse_candles_jsonl(
         return str(open_time).replace("Z", "+00:00")
 
     rows.sort(key=_row_open_time)
+    rows = dedupe_candle_rows(rows)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as handle:
@@ -196,7 +214,7 @@ def indicators_json_to_candles_jsonl(
                 if isinstance(record, dict) and "event_time" in record:
                     event_times.append(str(record["event_time"]))
 
-    rsi_values = indicators.get("rsi", {}).get("values", [])
+    rsi_values = indicator_series(indicators, "rsi")
     macd = indicators.get("macd", {})
     macd_line = macd.get("macd_line", []) if isinstance(macd, dict) else []
     signal_line = macd.get("signal_line", []) if isinstance(macd, dict) else []
@@ -224,6 +242,19 @@ def indicators_json_to_candles_jsonl(
                 record["signal_line"] = signal_line[index]
             handle.write(json.dumps(record) + "\n")
     return length
+
+
+def indicator_series(indicators: dict[str, Any], name: str) -> list[Any]:
+    """Series of a single-output indicator from ta-indicators-from-scratch.
+
+    The CLI nests it under its own name (``{"rsi": {"rsi": [...]}}``); ``values`` is accepted
+    for older outputs.
+    """
+    block = indicators.get(name, {})
+    if not isinstance(block, dict):
+        return []
+    series = block.get(name, block.get("values", []))
+    return series if isinstance(series, list) else []
 
 
 def signals_json_to_jsonl(signals_path: Path, output: Path) -> int:

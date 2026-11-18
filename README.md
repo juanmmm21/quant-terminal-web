@@ -96,7 +96,202 @@ export TERMINAL_ANALYSIS_CANDLE_LIMIT=0   # default: no cap
 | Live | `tick_bridge` + lakehouse | Updated price and candles |
 | UI | `quant-terminal-web` | Recommendation + TradingView-like chart |
 
-**There is no capital simulation or paper trading in the main flow.** The UI shows recommendations, indicators, historical signals, and training metrics (directional accuracy on history).
+The terminal shows recommendations, indicators, historical signals and training metrics. Paper
+trading on the Binance **testnet** is a separate, gated process (see
+[24/7 paper trading](#247-paper-trading-on-the-binance-testnet)).
+
+---
+
+## Out-of-sample validation and the paper-trading gate
+
+No strategy reaches paper trading on the strength of a single in-sample backtest. Every time the
+analysis engine picks a strategy for a timeframe, `scripts/strategy_validation.py` (cached for
+`TERMINAL_VALIDATION_MAX_AGE_HOURS`, default 6 h) runs, through the components' CLIs:
+
+1. `event-driven-backtester validate` — **purged k-fold** (5 folds, 1 % embargo) and
+   **walk-forward** (rolling window, 5 test windows). Each fold picks the candidate with the best
+   Sharpe on its training bars and scores it on unseen bars. Bars whose information overlaps the
+   test block (the p90 holding period) are purged.
+2. `quant-metrics-calculator overfit` — **deflated Sharpe ratio** with `n_trials` = every
+   (strategy, timeframe) pair the engine scores (2 × 5 = 10) and **PBO** via CSCV (16 blocks,
+   12,870 combinations).
+
+Candles are stamped at their open but signals use the close, so for validation both the price
+and the signal are moved to the bar close: a signal is filled at the close it was computed from.
+Strategies that never trade are excluded (a flat line would "win" against losing candidates).
+
+The report (`data/runtime/validation_{tf}.json`, `GET /api/v1/validation?timeframe=1h`) is shown
+in the **Validación fuera de muestra** panel. `POST /api/v1/paper/promote` requires the control
+token **and** the `report_id` the operator was shown (409 if the report changed). Gate checks:
+
+| Check | Default | Variable |
+|-------|---------|----------|
+| Deflated Sharpe ≥ | 0.95 | `TERMINAL_GATE_MIN_DEFLATED_SHARPE` |
+| PBO ≤ | 0.5 | `TERMINAL_GATE_MAX_PBO` |
+| Walk-forward and purged k-fold OOS Sharpe > | 0 | `TERMINAL_GATE_MIN_OOS_SHARPE` |
+| Report age ≤ (h) | 24 | `TERMINAL_GATE_MAX_REPORT_AGE_HOURS` |
+
+`TERMINAL_PAPER_GATE_MODE=enforce` (default) refuses a failing strategy with 412;
+`acknowledge` lets it through but flags it `gate_passed: false` everywhere, including the
+public view.
+
+### Measured in this session (2026-11-17)
+
+Binance BTCUSDT spot klines from `data-api.binance.vision`; 0.1 % commission per side, 0.01 BTC
+per trade on 10,000 USDT; fills at the bar close; Linux x86_64 container (4 vCPU Intel Xeon).
+These are **backtest** figures on history, not live or paper results.
+
+| Timeframe | Period | Bars | Selected | Sharpe (ann.) | PSR | DSR | PBO | WF OOS Sharpe | CV OOS Sharpe |
+|-----------|--------|------|----------|---------------|-----|-----|-----|---------------|---------------|
+| 1h | 2024-11-18 → 2026-11-18 | 17,519 | rsi_mean_reversion | −0.78 | 0.134 | 0.0001 | 0.013 | −1.40 | −0.78 |
+| 5m | 2026-08-19 → 2026-11-17 | 25,921 | rsi_mean_reversion | −7.21 | 0.0002 | 0.0000 | 0.000 | −10.37 | −7.21 |
+| 1m (also 10m/15m) | 2026-08-19 → 2026-11-17 | 129,600 | rsi_mean_reversion | −40.5 | 0.0000 | 0.0000 | 0.000 | −40.96 | −40.52 |
+
+Neither strategy passes: the gate blocks promotion in `enforce` mode. PBO is low only because
+with two candidates the less-bad one (RSI) wins both in and out of sample; the out-of-sample
+Sharpe is what fails. 10m/15m are analysed on 1m candles by the engine, so they repeat 1m.
+
+---
+
+## 24/7 paper trading on the Binance testnet
+
+**Only test funds.** `quant-paper-trader` routes through `order-routing-gateway --mode testnet`;
+real-money routing is locked inside the gateway and nothing in this repository unlocks it.
+
+### What runs (`docker compose`)
+
+| Service | Role | Restart / health |
+|---------|------|------------------|
+| `bootstrap` | downloads history once (`--if-missing`) | one-shot |
+| `feed` | `websocket-feed-handler` → `data/live/ticks.jsonl` (rotated at 100 MB) + `feed_status.json` (stale detection: 15 s silence or 5 s exchange lag) | `unless-stopped`; unhealthy if the status file is old or stale |
+| `daemon` | live ticks → lakehouse → analysis + out-of-sample validation | `unless-stopped` |
+| `api` | FastAPI, **bound to 127.0.0.1:8000** (operator only: SSH tunnel or VPN) | `unless-stopped`; `/health` |
+| `paper-trader` | one step every 10 s (below) | `unless-stopped`; unhealthy if `heartbeat.json` is older than 2 min |
+| `alerts` | `quant-alerts`: pushes critical/warning alerts to the iOS app through APNs (`TERMINAL_APNS_*`) | `unless-stopped` |
+| `comparison` | `scripts/paper_vs_backtest.py` every 15 min → `data/paper/comparison.json` | loop |
+| `public` | nginx: `/public` page and `GET /api/v1/public/*` only, port 8080 | `unless-stopped` |
+
+Every Python service uses the same image; state lives in the `quant-data` volume, so restarts and
+upgrades keep the journal, the lakehouse and the promotion.
+
+### What the trader does every step
+
+1. **Emergency stop** (`POST /api/v1/bot/panic`, authenticated): cancel every open order at the
+   venue; if the exchange is unreachable, keep retrying every step and never send a new order.
+   The stop itself is a file write in the API, so it works with the exchange down.
+2. **Reconcile** orders whose outcome is unknown (timeout, disconnect, process crash between
+   sending and recording): the intent is written to `data/paper/state.json` *before* it is sent,
+   and afterwards the trader asks the exchange by `clientOrderId` — a fill is booked exactly
+   once, an order the exchange never saw is forgotten. Nothing new is sent meanwhile.
+3. **Hold** when paused, when no strategy is promoted (the out-of-sample gate), or when market
+   data is stale (feed status, status-file age or last-tick age).
+4. **Target** from the promoted strategy's latest recommendation (`buy` → long
+   `TERMINAL_PAPER_QUANTITY`, `sell` → flat); then hard caps and `risk-management-engine check`
+   (fails closed if the engine is unavailable).
+
+`backend/tests/test_chaos.py` drives these paths with a simulated exchange: disconnection at
+submit, reply lost after the exchange accepted the order, process crash mid-order, an order still
+working, stale data, and the emergency stop with the exchange down (plus the authenticated API
+call that triggers it).
+
+### iOS app (quant-terminal-ios)
+
+Each phone gets its **own token**: `POST /api/v1/devices` with the operator token returns a
+`qtd_…` token once; only its SHA-256 is stored (`data/runtime/devices.json`, mode 600) and it can
+be revoked alone. A device token can read `/mobile/overview`, pull the emergency stop and register
+its APNs token; it cannot resume the bot, promote strategies or manage devices (403). Push alerts
+are signed with your APNs `.p8` key (ES256 JWT, refreshed every 50 min); the key file is mounted
+read-only and never goes in `.env`. See the quant-terminal-ios README for signing and setup.
+
+### Deploy
+
+```bash
+git clone https://github.com/juanmmm21/quant-terminal-web && cd quant-terminal-web
+cp .env.example .env
+# fill TERMINAL_ADMIN_TOKEN and BINANCE_TESTNET_API_KEY / _SECRET (testnet.binance.vision)
+docker compose up -d --build
+docker compose ps                       # all services healthy after ~1-3 min (bootstrap first)
+ssh -L 8000:127.0.0.1:8000 your-server  # operator UI/API from your machine
+```
+
+Then, from the operator terminal (token in the control field): review the **Validación fuera de
+muestra** panel and promote a strategy. With the default `TERMINAL_PAPER_GATE_MODE=enforce` a
+strategy that fails the gate cannot be promoted (none of the current ones passes, see the
+measured table above); `acknowledge` lets you paper-trade it anyway, flagged as such in public.
+
+Public page: `http://<server>:8080/public` (put TLS in front of it if you publish it). Binance
+answers HTTP 451 from restricted locations, testnet included; deploy from an eligible location.
+
+| Variable | Default | |
+|----------|---------|-|
+| `TERMINAL_PAPER_VENUE` | `testnet` | `simulated` = fills at the live market price, no exchange (dry run) |
+| `TERMINAL_PAPER_QUANTITY` | `0.001` | BTC per position |
+| `TERMINAL_PAPER_MAX_POSITION` / `_MAX_ORDER_NOTIONAL` | `0.01` / `1000` | hard caps |
+| `TERMINAL_PAPER_INTERVAL_SECONDS` | `10` | step period |
+| `TERMINAL_PROJECT_ROOT` | repository root | set to `/app` in the image |
+
+---
+
+## Limit-order fills with and without queue position
+
+`scripts/l2_fill_study.py` runs real L2 data through the whole chain, via the CLIs: recording →
+`market-data-lakehouse ingest-depth/export-depth` → `order-book-reconstructor replay` (sequence
+checks, resync, verification against REST snapshots) → passive limit orders →
+`market-condition-simulator queue-fill --model queue|touch` → `event-driven-backtester run
+--executions`. Output: `data/runtime/l2_fill_study.json`.
+
+```bash
+python3 scripts/l2_fill_study.py --recording stream.jsonl snapshots.jsonl
+```
+
+**Measured** on 90 minutes of real BTCUSDT data (`data-stream.binance.vision`, 2026-11-17 23:19 → 2026-11-18 00:49 UTC: 53,975 depth diffs at 100 ms, 170,672 trades, 18 REST snapshots of 5,000 levels; 4-vCPU Linux x86_64, Python 3.12.3; whole pipeline 2 min 15 s). Simulations on recorded data, not live or paper results.
+
+- **Book reconstruction**: 53,581 diffs applied, 394 stale (before the first snapshot), **0 gaps, 0 resyncs** (no message was lost in 90 min); verified against 17 REST snapshots: **6,800/6,800 levels matched**.
+- **Systematic probe** (358 passive orders at the touch, 0.001 BTC, 60 s time in force, 50 ms latency):
+
+| Model | Fill rate | Median time to first fill | Expired unfilled | Markout 1 s | 10 s | 60 s |
+|---|---|---|---|---|---|---|
+| naive `touch` | 91.6 % | 0.71 s | 30 | −0.24 bps | −0.35 bps | −0.59 bps |
+| **queue position** | **79.3 %** | **3.91 s** | 72 | −0.71 bps | −1.12 bps | **−1.58 bps** |
+
+  Fills that need the queue ahead to trade first come later and are the ones the market moves against: the naive model overstates fills by 12 points and understates adverse selection about 2.7× at 60 s.
+- **Strategy orders** (the strategies' 1m signals over the window): only 5 limit orders (MACD; RSI emitted none), so these numbers are anecdotal: fills 2/5 with the queue model vs 4/5 with `touch`; P&L of the 0.001 BTC strategy −0.29 USDT (queue) vs −0.48 (touch) vs −0.54 with the old immediate market fills.
+
+
+---
+
+## Tick-to-decision latency (Rust accelerators)
+
+`scripts/latency_bench.py` replays recorded Binance depth diffs as raw messages through three
+paths that end in the same decision (top-5 imbalance and microprice, computed with `Decimal`),
+checks that **every message gets the same decision on every path**, and reports per-message
+latency after a 1,000-message warm-up:
+
+| Path | p50 | p90 | p99 | p99.9 | max |
+|------|-----|-----|-----|-------|-----|
+| v0.1: `json.loads` → Decimal parser → `DepthSynchronizer` → view | 131 µs | 714 µs | 3.70 ms | 7.34 ms | 18.3 ms |
+| fast API, Python fallback | 86 µs | 409 µs | 2.05 ms | 4.00 ms | 7.8 ms |
+| fast API, Rust (`websocket-feed-handler-rs` + `order-book-reconstructor-rs`) | **15.5 µs** | 48 µs | **166 µs** | 321 µs | 0.69 ms |
+
+Data and machine: 25,589 BTCUSDT depth diffs (100 ms stream, ~32 levels each) recorded from
+`data-stream.binance.vision` on 2026-11-17 23:19–00:01 UTC; 4-vCPU Linux x86_64 container,
+Python 3.12.3, release builds. Histograms:
+
+```text
+baseline (v0.1)            fast API, Rust
+  <50µs   2875 ######       <10µs    882 ##
+ <100µs   5726 ###########  <20µs  15824 ########################################
+ <200µs   7076 ##############  <50µs   5582 ##############
+ <500µs   5696 ###########   <100µs   1520 ####
+<1000µs   1854 ####          <200µs    652 ##
+<2000µs   1026 ##            <500µs    124 #
+<5000µs    739 #            <1000µs      5 #
+ >=5 ms     97 #
+```
+
+```bash
+python3 scripts/latency_bench.py --recording stream.jsonl snapshots.jsonl
+```
 
 ---
 
@@ -329,6 +524,9 @@ Open [http://localhost:5173](http://localhost:5173). Vite proxies `/api` to the 
 | `TERMINAL_ANALYSIS_CANDLE_LIMIT` | `0` (env) | Bars to train on (`0` = all) |
 | `TERMINAL_AUDIT_DB_PATH` | `data/runtime/audit.db` | Audit SQLite (live session) |
 | `TERMINAL_BOT_STATE_PATH` | `data/runtime/bot_state.json` | Engine state (pause/panic) |
+| `TERMINAL_ADMIN_TOKEN` | — (control disabled) | Operator bearer token; environment only, never commit it |
+| `TERMINAL_BINANCE_REST_URL` | `https://data-api.binance.vision` | Public market-data REST base used by the bootstrap |
+| `TERMINAL_VALIDATION` | `1` | `0` skips out-of-sample validation in the analysis engine |
 
 ---
 
@@ -339,10 +537,25 @@ Open [http://localhost:5173](http://localhost:5173). Vite proxies `/api` to the 
 | `GET` | `/health` | Healthcheck + `data_mode` (`demo` \| `live`) |
 | `GET` | `/summary` | Top bar: price, capital, trades, bot state |
 | `GET` | `/bot/status` | State (`running` \| `paused` \| `panic`) |
-| `POST` | `/bot/panic` | Emergency stop |
-| `POST` | `/bot/pause` | Pause |
-| `POST` | `/bot/resume` | Resume |
-| `POST` | `/bot/reset` | Exit panic → `running` |
+| `POST` | `/bot/panic` | Emergency stop 🔒 |
+| `POST` | `/bot/pause` | Pause 🔒 |
+| `POST` | `/bot/resume` | Resume 🔒 |
+| `POST` | `/bot/reset` | Exit panic → `running` 🔒 |
+| `GET` | `/validation?timeframe=1h` | DSR, PBO, walk-forward and purged k-fold report + gate |
+| `GET` | `/paper/promotion` | Strategy currently in paper trading |
+| `POST` | `/paper/promote` | Promote the validated strategy (`timeframe`, `report_id`) 🔒 |
+| `POST` | `/paper/demote` | Stop paper trading it 🔒 |
+
+| `POST` | `/devices` | Create a device token for the iOS app (shown once) 🔒 operator |
+| `GET` | `/devices` | List devices (no secrets) 🔒 operator |
+| `DELETE` | `/devices/{device_id}` | Revoke a device 🔒 operator |
+| `PUT` | `/devices/me/push-token` | Register the APNs token of the calling device 🔒 device |
+| `GET` | `/mobile/overview` | Bot status, paper trader, strategy, P&L and alerts for the app 🔒 |
+| `GET` | `/public/paper` | Read-only paper vs backtest comparison (public) |
+
+🔒 = `Authorization: Bearer <token>`: `TERMINAL_ADMIN_TOKEN` (operator) or a device token. With
+no `TERMINAL_ADMIN_TOKEN` in the environment these endpoints answer 503 (control disabled). The
+web UI asks for the token once per tab and keeps it in `sessionStorage` only.
 | `GET` | `/metrics` | Sharpe, Sortino, profit factor, drawdown |
 | `GET` | `/equity-curve` | Account capital in USDT |
 | `GET` | `/market/candles` | OHLCV candles from the lakehouse |

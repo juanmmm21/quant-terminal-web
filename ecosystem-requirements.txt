@@ -1,0 +1,14 @@
+# Ecosystem components used by quant-terminal-web (installed as CLIs; never imported).
+# Pinned to the released tags of each component (v0.2.0 from the quant roadmap).
+websocket-feed-handler @ https://github.com/juanmmm21/websocket-feed-handler/archive/refs/tags/v0.2.0.tar.gz
+order-book-reconstructor @ https://github.com/juanmmm21/order-book-reconstructor/archive/refs/tags/v0.2.0.tar.gz
+market-data-lakehouse @ https://github.com/juanmmm21/market-data-lakehouse/archive/refs/tags/v0.2.0.tar.gz
+market-condition-simulator @ https://github.com/juanmmm21/market-condition-simulator/archive/refs/tags/v0.2.0.tar.gz
+event-driven-backtester @ https://github.com/juanmmm21/event-driven-backtester/archive/refs/tags/v0.2.0.tar.gz
+risk-management-engine @ https://github.com/juanmmm21/risk-management-engine/archive/refs/tags/v0.2.0.tar.gz
+order-routing-gateway @ https://github.com/juanmmm21/order-routing-gateway/archive/refs/tags/v0.2.0.tar.gz
+quant-metrics-calculator @ https://github.com/juanmmm21/quant-metrics-calculator/archive/refs/tags/v0.2.0.tar.gz
+# unchanged by the roadmap: default branch
+ta-indicators-from-scratch @ https://github.com/juanmmm21/ta-indicators-from-scratch/archive/refs/heads/main.tar.gz
+alpha-signal-generator @ https://github.com/juanmmm21/alpha-signal-generator/archive/refs/heads/main.tar.gz
+trade-audit-logger @ https://github.com/juanmmm21/trade-audit-logger/archive/refs/heads/main.tar.gz

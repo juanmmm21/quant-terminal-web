@@ -63,15 +63,52 @@ def ingest_ticks(ticks_path: Path, lake_root: Path, *, symbol: str) -> None:
     )
 
 
-def write_tick_delta(source: Path, staging: Path, *, line_offset: int) -> int:
-    """Escribe ticks nuevos desde line_offset. Devuelve el nuevo offset."""
-    if not source.exists():
-        return line_offset
-    lines = source.read_text(encoding="utf-8").splitlines()
-    if len(lines) <= line_offset:
-        return line_offset
+class TickTail:
+    """Reads only the bytes appended since the last call; follows size-based rotation.
+
+    websocket-feed-handler --rotate-bytes renames the full file to ``<name>.1`` and starts a new
+    one. When the inode changes, the rest of the rotated file is read first, then the new file
+    from its start, so no complete line is lost.
+    """
+
+    def __init__(self, path: Path, *, from_end: bool = True) -> None:
+        self.path = path
+        self.offset = path.stat().st_size if from_end and path.exists() else 0
+        self.inode = path.stat().st_ino if path.exists() else None
+
+    def read_new(self) -> list[str]:
+        if not self.path.exists():
+            return []
+        stat = self.path.stat()
+        lines: list[str] = []
+        if self.inode is not None and stat.st_ino != self.inode:
+            rotated = self.path.with_name(self.path.name + ".1")
+            if rotated.exists() and rotated.stat().st_ino == self.inode:
+                lines += self._read(rotated, self.offset)[0]
+            self.offset = 0
+        elif stat.st_size < self.offset:  # truncated in place
+            self.offset = 0
+        self.inode = stat.st_ino
+        new_lines, self.offset = self._read(self.path, self.offset)
+        return lines + new_lines
+
+    @staticmethod
+    def _read(path: Path, offset: int) -> tuple[list[str], int]:
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            chunk = handle.read()
+        complete = chunk[: chunk.rfind(b"\n") + 1]  # keep a half-written last line for later
+        text = complete.decode("utf-8", errors="replace")
+        return [line for line in text.splitlines() if line.strip()], offset + len(complete)
+
+
+def write_tick_delta(tail: TickTail, staging: Path) -> int:
+    """Write the ticks appended since the last call to ``staging``; returns how many."""
+    lines = tail.read_new()
+    if not lines:
+        return 0
     staging.parent.mkdir(parents=True, exist_ok=True)
-    staging.write_text("\n".join(lines[line_offset:]) + "\n", encoding="utf-8")
+    staging.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return len(lines)
 
 
@@ -119,9 +156,7 @@ def main() -> None:
     if not args.no_tick_bridge:
         bridge_proc = start_tick_bridge(symbol, ticks_path)
 
-    tick_line_offset = 0
-    if ticks_path.exists():
-        tick_line_offset = len(ticks_path.read_text(encoding="utf-8").splitlines())
+    tail = TickTail(ticks_path)
 
     last_ingest = 0.0
     last_analysis = 0.0
@@ -142,18 +177,13 @@ def main() -> None:
             else:
                 ingested = False
                 if now - last_ingest >= args.ingest_interval:
-                    new_offset = write_tick_delta(
-                        ticks_path,
-                        tick_delta_path,
-                        line_offset=tick_line_offset,
-                    )
-                    if new_offset > tick_line_offset:
+                    count = write_tick_delta(tail, tick_delta_path)
+                    if count:
                         try:
                             ingest_ticks(tick_delta_path, lake_root, symbol=symbol)
-                            tick_line_offset = new_offset
                             last_ingest = now
                             ingested = True
-                            logger.info("ingested live ticks (offset=%s)", tick_line_offset)
+                            logger.info("ingested %s live ticks (offset=%s)", count, tail.offset)
                         except Exception as exc:
                             logger.error("lakehouse ingest failed: %s", exc)
 

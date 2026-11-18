@@ -1,0 +1,109 @@
+# 24/7 paper trading on the Binance spot TESTNET. Real-money routing is locked in
+# order-routing-gateway and nothing here unlocks it.
+#
+#   cp .env.example .env   # then fill TERMINAL_ADMIN_TOKEN and the testnet keys (never commit)
+#   docker compose up -d --build
+#
+# Operator API (controls, kill switch): 127.0.0.1:8000 only (use an SSH tunnel or a VPN).
+# Public read-only page: http://<host>:8080/public
+
+x-app: &app
+  image: quant-terminal-web:local
+  pull_policy: never  # built once by the bootstrap service below
+  env_file: .env
+  volumes:
+    - quant-data:/app/data
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  bootstrap:
+    <<: *app
+    build: .
+    restart: "no"
+    command: ["python", "scripts/bootstrap_market_data.py", "--days-1h", "730", "--days-1m", "90", "--if-missing"]
+
+  feed:
+    <<: *app
+    command:
+      - websocket-feed-handler
+      - --symbols=BTCUSDT
+      - --channels=trade
+      - --base-url=wss://data-stream.binance.vision
+      - --output=/app/data/live/ticks.jsonl
+      - --rotate-bytes=104857600
+      - --status-file=/app/data/live/feed_status.json
+      - --stale-after-seconds=15
+      - --max-event-lag-seconds=5
+      - --log-level=WARNING
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,os,time,sys; p='/app/data/live/feed_status.json'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 30 and not json.load(open(p))['stale'] else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  daemon:
+    <<: *app
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+    command: ["python", "scripts/market_daemon.py", "--no-tick-bridge"]
+
+  api:
+    <<: *app
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  paper-trader:
+    <<: *app
+    depends_on:
+      api: { condition: service_started }
+    command: ["quant-paper-trader"]  # venue from TERMINAL_PAPER_VENUE (testnet by default)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,time,sys; p='/app/data/paper/heartbeat.json'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 120 else 1)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+
+  alerts:
+    <<: *app
+    # APNs push alerts for the iOS app. Without TERMINAL_APNS_* it only tracks alerts.
+    # Mount your .p8 key read-only and point TERMINAL_APNS_KEY_PATH at it, e.g.:
+    #   volumes: [quant-data:/app/data, ./secrets/AuthKey.p8:/run/secrets/apns.p8:ro]
+    command: ["quant-alerts"]
+
+  comparison:
+    <<: *app
+    command: ["sh", "-c", "while true; do python scripts/paper_vs_backtest.py || echo 'comparison not ready yet'; sleep 900; done"]
+
+  public:
+    image: nginx:1.27-alpine
+    depends_on:
+      api: { condition: service_started }
+      public-assets: { condition: service_completed_successfully }
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./deploy/nginx-public.conf:/etc/nginx/conf.d/default.conf:ro
+      - public-assets:/usr/share/nginx/html:ro
+
+  public-assets:
+    <<: *app
+    restart: "no"
+    user: root
+    command: ["sh", "-c", "cp -r /app/frontend/dist/. /srv/public/"]
+    volumes:
+      - public-assets:/srv/public
+
+volumes:
+  quant-data:
+  public-assets:

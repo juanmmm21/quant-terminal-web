@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -16,9 +17,13 @@ import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
-BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+# data-api.binance.vision is Binance's public market-data-only endpoint (no keys, no trading);
+# it also answers from regions where api.binance.com returns HTTP 451.
+BINANCE_REST_URL = os.environ.get("TERMINAL_BINANCE_REST_URL", "https://data-api.binance.vision")
+BINANCE_KLINES_URL = f"{BINANCE_REST_URL.rstrip('/')}/api/v3/klines"
 MAX_BINANCE_BATCH = 1000
 
 
@@ -92,20 +97,43 @@ def fetch_klines_paginated(symbol: str, interval: str, *, max_candles: int) -> l
     return collected
 
 
-def kline_to_tick(symbol: str, kline: list[object], index: int) -> dict[str, str]:
-    open_time_ms = int(kline[0])
-    close_price = str(kline[4])
-    volume = str(kline[5])
-    event_time = datetime.fromtimestamp(open_time_ms / 1000.0, tz=UTC).isoformat()
-    return {
-        "exchange": "binance",
-        "symbol": symbol,
-        "trade_id": f"bootstrap-{index}",
-        "price": close_price,
-        "quantity": volume,
-        "side": "buy",
-        "event_time": event_time,
-    }
+INTERVAL_MS = {"1m": 60_000, "5m": 300_000, "1h": 3_600_000}
+
+
+def kline_to_ticks(
+    symbol: str, kline: list[object], index: int, *, interval_ms: int
+) -> list[dict[str, str]]:
+    """Four ticks per kline so the lakehouse rebuilds the exact OHLCV bar.
+
+    open at the bar's open time, high/low inside it and close 1 ms before it ends. The close
+    price must never be stamped at the open time: a strategy reading that bar would see the
+    future.
+    """
+    open_time_ms = int(str(kline[0]))
+    open_p, high_p, low_p, close_p = (str(kline[i]) for i in (1, 2, 3, 4))
+    volume = Decimal(str(kline[5]))
+    quarter = volume / 4 if volume > 0 else Decimal("0.00000001")
+    rising = Decimal(close_p) >= Decimal(open_p)
+    middle = (low_p, high_p) if rising else (high_p, low_p)
+    stamps = (
+        open_time_ms,
+        open_time_ms + interval_ms // 3,
+        open_time_ms + 2 * interval_ms // 3,
+        open_time_ms + interval_ms - 1,
+    )
+    prices = (open_p, *middle, close_p)
+    return [
+        {
+            "exchange": "binance",
+            "symbol": symbol,
+            "trade_id": f"bootstrap-{index}-{leg}",
+            "price": price,
+            "quantity": str(quarter),
+            "side": "buy",
+            "event_time": datetime.fromtimestamp(stamp / 1000.0, tz=UTC).isoformat(),
+        }
+        for leg, (stamp, price) in enumerate(zip(stamps, prices, strict=True))
+    ]
 
 
 def candles_for_days(interval: str, days: int) -> int:
@@ -120,16 +148,32 @@ def candles_for_days(interval: str, days: int) -> int:
     raise ValueError(f"unsupported interval for bootstrap: {interval}")
 
 
-def write_ticks(path: Path, symbol: str, klines: list[list[object]], *, id_offset: int = 0) -> int:
+def write_ticks(
+    path: Path,
+    symbol: str,
+    klines: list[list[object]],
+    *,
+    interval: str,
+    id_offset: int = 0,
+) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
+    now_ms = int(time.time() * 1000)
+    written = 0
     with path.open("w", encoding="utf-8") as handle:
         for index, kline in enumerate(klines):
-            tick = kline_to_tick(symbol, kline, id_offset + index)
-            handle.write(json.dumps(tick) + "\n")
-    return len(klines)
+            if int(str(kline[6])) > now_ms:
+                continue  # the current bar is still open: its OHLC is not final yet
+            written += 1
+            for tick in kline_to_ticks(
+                symbol, kline, id_offset + index, interval_ms=INTERVAL_MS[interval]
+            ):
+                handle.write(json.dumps(tick) + "\n")
+    return written
 
 
-def ingest_ticks(ticks_path: Path, lake_root: Path, *, symbol: str) -> None:
+def ingest_ticks(
+    ticks_path: Path, lake_root: Path, *, symbol: str, timeframes: tuple[str, ...]
+) -> None:
     cli = resolve_lakehouse_cli()
     cmd = [
         cli,
@@ -143,9 +187,7 @@ def ingest_ticks(ticks_path: Path, lake_root: Path, *, symbol: str) -> None:
         "--symbol",
         symbol,
         "--timeframes",
-        "1m",
-        "5m",
-        "1h",
+        *timeframes,
         "--flush-batch-size",
         "500",
     ]
@@ -173,9 +215,11 @@ def bootstrap_history(
         print(f"downloading ~{target_1h} hourly candles ({days_1h} days)...")
         klines_1h = fetch_klines_paginated(symbol, "1h", max_candles=target_1h)
         ticks_1h = work / "ticks_1h.jsonl"
-        written = write_ticks(ticks_1h, symbol, klines_1h)
-        print(f"ingesting {written} hourly-derived ticks...")
-        ingest_ticks(ticks_1h, lake, symbol=symbol)
+        written = write_ticks(ticks_1h, symbol, klines_1h, interval="1h")
+        print(f"ingesting {written} hourly klines into the 1h series...")
+        # Only the 1h series: hourly ticks inside the 1m/5m series would create bars that
+        # never traded at that price at that minute.
+        ingest_ticks(ticks_1h, lake, symbol=symbol, timeframes=("1h",))
         total_ticks += written
 
     if days_1m > 0:
@@ -183,12 +227,12 @@ def bootstrap_history(
         print(f"downloading ~{target_1m} minute candles ({days_1m} days)...")
         klines_1m = fetch_klines_paginated(symbol, "1m", max_candles=target_1m)
         ticks_1m = work / "ticks_1m.jsonl"
-        written = write_ticks(ticks_1m, symbol, klines_1m, id_offset=total_ticks)
-        print(f"ingesting {written} minute-derived ticks...")
-        ingest_ticks(ticks_1m, lake, symbol=symbol)
+        written = write_ticks(ticks_1m, symbol, klines_1m, interval="1m", id_offset=total_ticks)
+        print(f"ingesting {written} minute klines into the 1m and 5m series...")
+        ingest_ticks(ticks_1m, lake, symbol=symbol, timeframes=("1m", "5m"))
         total_ticks += written
 
-    print(f"lakehouse ready at {lake} ({total_ticks} bootstrap ticks)")
+    print(f"lakehouse ready at {lake} ({total_ticks} klines)")
 
 
 def main() -> None:
@@ -206,7 +250,23 @@ def main() -> None:
         default=730,
         help="días de histórico en velas de 1 hora (0 = omitir)",
     )
+    parser.add_argument(
+        "--if-missing",
+        action="store_true",
+        help="no hacer nada si el lakehouse ya tiene al menos --min-1h-bars velas de 1h",
+    )
+    parser.add_argument("--min-1h-bars", type=int, default=2000)
     args = parser.parse_args()
+    if args.if_missing:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from ecosystem_tools import count_lakehouse_candles
+
+        existing = count_lakehouse_candles(
+            project_root() / "data" / "lake", symbol=args.symbol.upper(), timeframe="1h"
+        )
+        if existing >= args.min_1h_bars:
+            print(f"lakehouse already has {existing} 1h candles; skipping bootstrap")
+            return
     bootstrap_history(symbol=args.symbol.upper(), days_1m=args.days_1m, days_1h=args.days_1h)
 
 
