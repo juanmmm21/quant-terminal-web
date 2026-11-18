@@ -73,6 +73,13 @@ services:
       timeout: 5s
       retries: 3
 
+  alerts:
+    <<: *app
+    # APNs push alerts for the iOS app. Without TERMINAL_APNS_* it only tracks alerts.
+    # Mount your .p8 key read-only and point TERMINAL_APNS_KEY_PATH at it, e.g.:
+    #   volumes: [quant-data:/app/data, ./secrets/AuthKey.p8:/run/secrets/apns.p8:ro]
+    command: ["quant-alerts"]
+
   comparison:
     <<: *app
     command: ["sh", "-c", "while true; do python scripts/paper_vs_backtest.py || echo 'comparison not ready yet'; sleep 900; done"]

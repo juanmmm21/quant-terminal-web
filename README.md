@@ -167,6 +167,7 @@ real-money routing is locked inside the gateway and nothing in this repository u
 | `daemon` | live ticks → lakehouse → analysis + out-of-sample validation | `unless-stopped` |
 | `api` | FastAPI, **bound to 127.0.0.1:8000** (operator only: SSH tunnel or VPN) | `unless-stopped`; `/health` |
 | `paper-trader` | one step every 10 s (below) | `unless-stopped`; unhealthy if `heartbeat.json` is older than 2 min |
+| `alerts` | `quant-alerts`: pushes critical/warning alerts to the iOS app through APNs (`TERMINAL_APNS_*`) | `unless-stopped` |
 | `comparison` | `scripts/paper_vs_backtest.py` every 15 min → `data/paper/comparison.json` | loop |
 | `public` | nginx: `/public` page and `GET /api/v1/public/*` only, port 8080 | `unless-stopped` |
 
@@ -192,6 +193,15 @@ upgrades keep the journal, the lakehouse and the promotion.
 submit, reply lost after the exchange accepted the order, process crash mid-order, an order still
 working, stale data, and the emergency stop with the exchange down (plus the authenticated API
 call that triggers it).
+
+### iOS app (quant-terminal-ios)
+
+Each phone gets its **own token**: `POST /api/v1/devices` with the operator token returns a
+`qtd_…` token once; only its SHA-256 is stored (`data/runtime/devices.json`, mode 600) and it can
+be revoked alone. A device token can read `/mobile/overview`, pull the emergency stop and register
+its APNs token; it cannot resume the bot, promote strategies or manage devices (403). Push alerts
+are signed with your APNs `.p8` key (ES256 JWT, refreshed every 50 min); the key file is mounted
+read-only and never goes in `.env`. See the quant-terminal-ios README for signing and setup.
 
 ### Deploy
 
@@ -507,6 +517,13 @@ Open [http://localhost:5173](http://localhost:5173). Vite proxies `/api` to the 
 | `GET` | `/paper/promotion` | Strategy currently in paper trading |
 | `POST` | `/paper/promote` | Promote the validated strategy (`timeframe`, `report_id`) 🔒 |
 | `POST` | `/paper/demote` | Stop paper trading it 🔒 |
+
+| `POST` | `/devices` | Create a device token for the iOS app (shown once) 🔒 operator |
+| `GET` | `/devices` | List devices (no secrets) 🔒 operator |
+| `DELETE` | `/devices/{device_id}` | Revoke a device 🔒 operator |
+| `PUT` | `/devices/me/push-token` | Register the APNs token of the calling device 🔒 device |
+| `GET` | `/mobile/overview` | Bot status, paper trader, strategy, P&L and alerts for the app 🔒 |
+| `GET` | `/public/paper` | Read-only paper vs backtest comparison (public) |
 
 🔒 = `Authorization: Bearer <token>`: `TERMINAL_ADMIN_TOKEN` (operator) or a device token. With
 no `TERMINAL_ADMIN_TOKEN` in the environment these endpoints answer 503 (control disabled). The
